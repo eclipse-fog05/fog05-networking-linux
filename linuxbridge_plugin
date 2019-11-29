@@ -31,10 +31,10 @@ import hashlib
 import psutil
 import netifaces
 from jinja2 import Environment
-from fog05sdk.interfaces.NetworkPlugin import *
-from fog05sdk import Yaks_Connector
+from fog05_sdk.interfaces.NetworkPlugin import *
+from fog05_sdk import Yaks_Connector
 from mvar import MVar
-from fog05sdk.DLogger import DLogger
+from fog05_sdk.DLogger import DLogger
 
 VNI_LIMIT = 16777215
 VLAN_LIMIT = 4095
