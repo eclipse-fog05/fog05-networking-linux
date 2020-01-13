@@ -21,7 +21,7 @@ else
 	sudo cp ../plugin-net-linuxbridge/get_face_address /etc/fos/plugins/plugin-net-linuxbridge/get_face_address
 	sudo ln -sf /etc/fos/plugins/plugin-net-linuxbridge/get_face_address /usr/bin/fos_get_address
 endif
-	sudo cp /etc/fos/plugins/linuxbridge/fos_linuxbridge.service /lib/systemd/system/
+	sudo cp /etc/fos/plugins/plugin-net-linuxbridge/fos_linuxbridge.service /lib/systemd/system/
 	sudo sh -c "echo $(UUID) | xargs -i  jq  '.configuration.nodeid = \"{}\"' /etc/fos/plugins/plugin-net-linuxbridge/linuxbridge_plugin.json > /tmp/linuxbridge_plugin.tmp && mv /tmp/linuxbridge_plugin.tmp /etc/fos/plugins/plugin-net-linuxbridge/linuxbridge_plugin.json"
 
 
