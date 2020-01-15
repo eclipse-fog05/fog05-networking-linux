@@ -15,7 +15,14 @@
 
  -->
 
-bridge utils plugin
+
+[![Gitter](https://badges.gitter.im/atolab/fog05.svg)](https://gitter.im/atolab/fog05?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge)
+[![License](https://img.shields.io/badge/License-EPL%202.0-blue)](https://choosealicense.com/licenses/epl-2.0/)
+[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+[![Build Status](https://travis-ci.com/eclipse-fog05/plugin-net-linuxbridge.svg?branch=master)](https://travis-ci.com/eclipse-fog05/plugin-net-linuxbridge)
+
+
+Linux Bridge Network Manager Plugin
 
 This plugin allow fog05 to manage networks with bridge utils
 
