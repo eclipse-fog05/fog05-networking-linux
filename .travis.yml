@@ -1,0 +1,14 @@
+# use the latest ubuntu environment (18.04) available on travis
+dist: xenial
+sudo: required
+language: python
+os:
+- linux
+
+python:
+  - "3.5"
+  - "3.6"
+  - "3.7"
+
+script:
+  - make
