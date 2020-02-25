@@ -34,7 +34,7 @@ else
 	sudo cp ./get_face_address $(LB_PLUGIN_DIR)/get_face_address
 	sudo ln -sf $(LB_PLUGIN_DIR)/get_face_address $(BIN_DIR)/fos_get_address
 endif
-	sudo cp $(LB_PLUGIN_DIR)/fos_linuxbridge.service $(SYSTEMD_DIR)
+	sudo cp ./fos_linuxbridge.service $(SYSTEMD_DIR)
 	sudo sh -c "echo $(UUID) | xargs -i  jq  '.configuration.nodeid = \"{}\"' $(LB_PLUGIN_CONFFILE) > /tmp/linuxbridge_plugin.tmp && mv /tmp/linuxbridge_plugin.tmp $(LB_PLUGIN_CONFFILE)"
 
 
