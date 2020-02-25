@@ -8,6 +8,8 @@ LB_PLUGIN_CONFFILE = $(LB_PLUGIN_DIR)/linuxbridge_plugin.json
 SYSTEMD_DIR = /lib/systemd/system/
 BIN_DIR = /usr/bin
 
+clean:
+	echo "Nothing to do"
 all:
 	echo "Nothing to do"
 
