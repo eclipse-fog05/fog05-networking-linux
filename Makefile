@@ -18,6 +18,7 @@ install:
 ifeq "$(wildcard $(LB_PLUGIN_DIR))" ""
 	mkdir -p $(LB_PLUGIN_DIR)
 	sudo cp -r ./templates $(LB_PLUGIN_DIR)
+	sudo cp -r ./utils $(LB_PLUGIN_DIR)
 	sudo cp ./__init__.py $(LB_PLUGIN_DIR)
 	sudo cp ./linuxbridge_plugin $(LB_PLUGIN_DIR)
 	sudo cp ./README.md $(LB_PLUGIN_DIR)
@@ -27,6 +28,7 @@ ifeq "$(wildcard $(LB_PLUGIN_DIR))" ""
 	sudo cp ./linuxbridge_plugin.json $(LB_PLUGIN_DIR)
 else
 	sudo cp -r ./templates $(LB_PLUGIN_DIR)
+	sudo cp -r ./utils $(LB_PLUGIN_DIR)
 	sudo cp ./__init__.py $(LB_PLUGIN_DIR)
 	sudo cp ./linuxbridge_plugin $(LB_PLUGIN_DIR)
 	sudo cp ./README.md $(LB_PLUGIN_DIR)
