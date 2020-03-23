@@ -1097,7 +1097,7 @@ class LinuxBridge(NetworkPlugin):
 
         cmd = 'sudo ip netns add {}'.format(nsname)
         self.os.execute_command(cmd,blocking=True, external=True)
-        cmd = 'sudo ip netns exec {} ip l set dev lo up'
+        cmd = 'sudo ip netns exec {} ip l set dev lo up'.format(nsname)
         self.os.execute_command(cmd,blocking=True, external=True)
 
         self.logger.info('create_network_namespace()', 'Created new network namespace: {}'.format(nsname))
