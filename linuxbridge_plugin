@@ -1110,7 +1110,7 @@ class LinuxBridge(NetworkPlugin):
     def delete_network_namespace(self, nsname):
         self.logger.info('delete_network_namespace()', 'Removing network namespace: {}'.format(nsname))
 
-        if nsname not in self.ns_index:
+        if nsname not in self.netns:
             self.logger.error('delete_network_namespace()', 'Namespace {} not found'.format(nsname))
             return {'error':404,'error_msg':'namespace not existing'}
 
@@ -1124,10 +1124,9 @@ class LinuxBridge(NetworkPlugin):
 
     def create_virtual_interface_in_namespace(self, internal_name, nsname):
         self.logger.info('create_virtual_interface_in_namespace()', 'Creating new virtual interface {} in network namespace: {}'.format(internal_name, nsname))
-        if nsname not in self.ns_index:
+        if nsname not in self.netns:
             self.logger.error('create_virtual_interface_in_namespace()', 'Namespace {} not found'.format(nsname))
             return {'error':404,'error_msg':'namespace not existing'}
-
 
         # TODO discover the right index to be used
         index = 1
@@ -1142,7 +1141,6 @@ class LinuxBridge(NetworkPlugin):
 
         cmd = 'sudo ip l set up dev {}'.format(peername)
         self.os.execute_command(cmd,blocking=True, external=True)
-
         cmd = 'sudo ip netns exec {} ip l set dev {} up'.format(nsname, internal_name)
         self.os.execute_command(cmd,blocking=True, external=True)
 
@@ -1159,7 +1157,7 @@ class LinuxBridge(NetworkPlugin):
 
     def delete_virtual_interface_from_namespace(self, internal_name, nsname):
         self.logger.info('delete_virtual_interface_from_namespace()', 'Removing virtual interface {} from network namespace: {}'.format(internal_name, nsname))
-        if nsname not in self.ns_index:
+        if nsname not in self.netns:
             self.logger.error('create_virtual_interface_in_namespace()', 'Namespace {} not found'.format(nsname))
             return {'error':404,'error_msg':'namespace not existing'}
 
@@ -1178,7 +1176,7 @@ class LinuxBridge(NetworkPlugin):
 
     def assign_address_to_interface_in_namespace(self, intf_name, nsname, address):
         self.logger.info('assign_address_to_interface_in_namespace()', 'Assign {} to virtual interface {} in network namespace: {}'.format(address, intf_name, nsname))
-        if nsname not in self.ns_index:
+        if nsname not in self.netns:
             self.logger.error('create_virtual_interface_in_namespace()', 'Namespace {} not found'.format(nsname))
             return {'error':404,'error_msg':'namespace not existing'}
 
@@ -1193,12 +1191,11 @@ class LinuxBridge(NetworkPlugin):
 
     def get_address_of_interface_in_namespace(self, intf_name, nsname):
 
-        if nsname not in self.ns_index:
+        if nsname not in self.netns:
             self.logger.error('create_virtual_interface_in_namespace()', 'Namespace {} not found'.format(nsname))
             return {'error':404,'error_msg':'namespace not existing'}
 
-        cmd = 'ip netns exec {} {}'.format(nsname, os.path.join(self.DIR,'utils','get_addresses.py'))
-
+        cmd = 'sudo ip netns exec {} {}'.format(nsname, os.path.join(self.DIR,'utils','get_addresses.py'))
         # executing the command
         res = ''
         p = psutil.Popen(cmd, stdout=PIPE, executable='/bin/bash', shell=True)
@@ -1217,7 +1214,7 @@ class LinuxBridge(NetworkPlugin):
 
     def remove_address_from_interface_in_namespace(self, intf_name, nsname):
         self.logger.info('remove_address_from_interface_in_namespace()', 'Remove address from virtual interface {} in network namespace: {}'.format(intf_name, nsname))
-        if nsname not in self.ns_index:
+        if nsname not in self.netns:
             self.logger.error('remove_address_from_interface_in_namespace()', 'Namespace {} not found'.format(nsname))
             return {'error':404,'error_msg':'namespace not existing'}
 
@@ -1259,7 +1256,7 @@ class LinuxBridge(NetworkPlugin):
         cmd = 'ip l'
 
         if namespace != "default":
-            if namespace not in self.ns_index:
+            if namespace not in self.netns:
                 self.logger.error('create_virtual_interface_in_namespace()', 'Namespace {} not found'.format(namespace))
                 return {'error':404,'error_msg':'namespace not existing'}
             cmd = 'sudo ip netns exec {} ip l'.format(namespace)
