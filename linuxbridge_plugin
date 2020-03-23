@@ -134,6 +134,13 @@ class LinuxBridge(NetworkPlugin):
             # fuctions called by agent for CPs
             'create_port_agent': self.create_port_from_descriptor,
             'destroy_port_agent':self.destroy_port_agent,
+            'create_network_namespace':self.create_network_namespace,
+            'delete_network_namespace':self.delete_network_namespace,
+            'create_virtual_interface_in_namespace':self.create_virtual_interface_in_namespace,
+            'delete_virtual_interface_from_namespace': self.delete_virtual_interface_from_namespace,
+            'assign_address_to_interface_in_namespace': self.assign_address_to_interface_in_namespace,
+            'get_address_of_interface_in_namespace': self.get_address_of_interface_in_namespace,
+            'remove_address_from_interface_in_namespace': self.remove_address_from_interface_in_namespace,
         }
 
         for k in d:
