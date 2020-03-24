@@ -142,6 +142,7 @@ class LinuxBridge(NetworkPlugin):
             'assign_address_to_interface_in_namespace': self.assign_address_to_interface_in_namespace,
             'get_address_of_interface_in_namespace': self.get_address_of_interface_in_namespace,
             'remove_address_from_interface_in_namespace': self.remove_address_from_interface_in_namespace,
+            'assign_mac_address_to_interface_in_namespace': self.assign_mac_address_to_interface_in_namespace,
         }
 
         for k in d:
@@ -1215,7 +1216,31 @@ class LinuxBridge(NetworkPlugin):
 
         return {'result':{"namespace":nsname, "internal":internal_info, "external":peer_info}}
 
+    def assign_mac_address_to_interface_in_namespace(self, intf_name, nsname, address):
 
+        self.logger.info('assign_mac_address_to_interface_in_namespace()', 'Assign {} to virtual interface {} in network namespace: {}'.format(address, intf_name, nsname))
+        if nsname not in self.netns:
+            self.logger.error('assign_mac_address_to_interface_in_namespace()', 'Namespace {} not found'.format(nsname))
+            return {'error':404,'error_msg':'namespace not existing'}
+
+
+        try:
+            peername = self.__get_peername(intf_name, nsname)
+        except LookupError as le:
+            return {'error':404,'error_msg':'Cannot find peer name {}'.format(le)}
+        except Exception as e:
+            return {'error':500,'error_msg':'Error on peer name lookup {}'.format(e)}
+
+        cmd = 'sudo ip netns exec {} ip link set dev {} address {}'.format(nsname, intf_name,address)
+        self.os.execute_command(cmd,blocking=True, external=True)
+
+        internal_address = self.__get_address(intf_name, nsname).get(intf_name)
+        peer_address =  self.__get_address(peername).get(peername)
+
+        internal_info = {**{"name":intf_name}, **internal_address}
+        peer_info = {**{"name":peername}, **peer_address}
+
+        return {'result':{"namespace":nsname, "internal":internal_info, "external":peer_info}}
 
     def get_address_of_interface_in_namespace(self, intf_name, nsname):
 
@@ -1237,7 +1262,7 @@ class LinuxBridge(NetworkPlugin):
             return {'error':404,'error_msg':'interface not existing'}
 
         addr_info = addresses.get(intf_name)
-        return {'result':{intf_name:addr_info}}
+        return {'result':{**{"name":intf_name}, **addr_info}}
 
 
     def remove_address_from_interface_in_namespace(self, intf_name, nsname):
