@@ -1183,7 +1183,7 @@ class LinuxBridge(NetworkPlugin):
         self.netns.get(nsname).remove(internal_name)
 
 
-        return {'result':{"namespace":nsname, "internal":{"name":internal_name, 'ipv4': '', 'ipv6': '', 'mac': ''}}, "external":{"name":peername, 'ipv4': '', 'ipv6': '', 'mac': ''}}
+        return {'result':{"namespace":nsname, "internal":{"name":internal_name, 'ipv4': '', 'ipv6': '', 'mac': ''}, "external":{"name":peername, 'ipv4': '', 'ipv6': '', 'mac': ''}}}
 
 
     def assign_address_to_interface_in_namespace(self, intf_name, nsname, address):
