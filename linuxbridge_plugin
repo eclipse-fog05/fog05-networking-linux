@@ -30,6 +30,8 @@ import signal
 import hashlib
 import psutil
 import netifaces
+import re
+from subprocess import PIPE
 from jinja2 import Environment
 from fog05_sdk.interfaces.NetworkPlugin import *
 from fog05_sdk import Yaks_Connector
@@ -133,6 +135,14 @@ class LinuxBridge(NetworkPlugin):
             # fuctions called by agent for CPs
             'create_port_agent': self.create_port_from_descriptor,
             'destroy_port_agent':self.destroy_port_agent,
+            'create_network_namespace':self.create_network_namespace,
+            'delete_network_namespace':self.delete_network_namespace,
+            'create_virtual_interface_in_namespace':self.create_virtual_interface_in_namespace,
+            'delete_virtual_interface_from_namespace': self.delete_virtual_interface_from_namespace,
+            'assign_address_to_interface_in_namespace': self.assign_address_to_interface_in_namespace,
+            'get_address_of_interface_in_namespace': self.get_address_of_interface_in_namespace,
+            'remove_address_from_interface_in_namespace': self.remove_address_from_interface_in_namespace,
+            'assign_mac_address_to_interface_in_namespace': self.assign_mac_address_to_interface_in_namespace,
         }
 
         for k in d:
@@ -1079,7 +1089,327 @@ class LinuxBridge(NetworkPlugin):
         self.connector.loc.actual.remove_node_port(self.node, self.uuid, cp_id)
         return {'result':rec}
 
+
+
+    def create_network_namespace(self):
+        index = self.ns_index
+        nsname = 'fosns-{}'.format(index)
+
+        self.logger.info('create_network_namespace()', 'Creating new network namespace: {}'.format(nsname))
+
+        cmd = 'sudo ip netns add {}'.format(nsname)
+        self.os.execute_command(cmd,blocking=True, external=True)
+        cmd = 'sudo ip netns exec {} ip l set dev lo up'.format(nsname)
+        self.os.execute_command(cmd,blocking=True, external=True)
+
+        self.logger.info('create_network_namespace()', 'Created new network namespace: {}'.format(nsname))
+
+        self.ns_index = self.ns_index + 1
+        self.netns.update({nsname:['lo']})
+        return {'result': nsname}
+
+
+    def delete_network_namespace(self, nsname):
+        self.logger.info('delete_network_namespace()', 'Removing network namespace: {}'.format(nsname))
+
+        if nsname not in self.netns:
+            self.logger.error('delete_network_namespace()', 'Namespace {} not found'.format(nsname))
+            return {'error':404,'error_msg':'namespace not existing'}
+
+        cmd = 'sudo ip netns del {}'.format(nsname)
+        self.os.execute_command(cmd,blocking=True, external=True)
+        self.logger.info('delete_network_namespace()', 'Deleted network namespace: {}'.format(nsname))
+
+        self.netns.pop(nsname)
+
+        return {'result': nsname}
+
+    def create_virtual_interface_in_namespace(self, internal_name, nsname):
+        self.logger.info('create_virtual_interface_in_namespace()', 'Creating new virtual interface {} in network namespace: {}'.format(internal_name, nsname))
+        if nsname not in self.netns:
+            self.logger.error('create_virtual_interface_in_namespace()', 'Namespace {} not found'.format(nsname))
+            return {'error':404,'error_msg':'namespace not existing'}
+
+        # TODO discover the right index to be used
+        index = self.__get_index(nsname)
+        self.logger.info('create_virtual_interface_in_namespace()', 'Index: {}'.format(index))
+
+        peername = 'veth-{}-{}'.format(nsname,index)
+
+        cmd = 'sudo ip netns exec {} ip l add {} type veth peer name {}'.format(nsname, internal_name, peername)
+        self.os.execute_command(cmd,blocking=True, external=True)
+
+        cmd = 'sudo ip netns exec {} ip l set {} netns 1'.format(nsname, peername)
+        self.os.execute_command(cmd,blocking=True, external=True)
+
+        cmd = 'sudo ip l set up dev {}'.format(peername)
+        self.os.execute_command(cmd,blocking=True, external=True)
+        cmd = 'sudo ip netns exec {} ip l set dev {} up'.format(nsname, internal_name)
+        self.os.execute_command(cmd,blocking=True, external=True)
+
+        self.logger.info('create_virtual_interface_in_namespace()', 'Created {}<->{} in {}'.format(internal_name, peername, nsname))
+
+        self.netns.get(nsname).append(internal_name)
+
+        internal_address = self.__get_address(internal_name, nsname).get(internal_name)
+        peer_address =  self.__get_address(peername).get(peername)
+
+        internal_info = {**{"name":internal_name}, **internal_address}
+        peer_info = {**{"name":peername}, **peer_address}
+
+        # {"namespace":string, "internal":{"name":string,'ipv4': '', 'ipv6': '', 'mac': ''}, "external":{"name":string,'ipv4': '', 'ipv6': '', 'mac': ''}}
+
+        return {'result':{"namespace":nsname, "internal":internal_info, "external":peer_info}}
+
+
+
+    def delete_virtual_interface_from_namespace(self, internal_name, nsname):
+        self.logger.info('delete_virtual_interface_from_namespace()', 'Removing virtual interface {} from network namespace: {}'.format(internal_name, nsname))
+        if nsname not in self.netns:
+            self.logger.error('create_virtual_interface_in_namespace()', 'Namespace {} not found'.format(nsname))
+            return {'error':404,'error_msg':'namespace not existing'}
+
+        try:
+            peername = self.__get_peername(internal_name, nsname)
+        except LookupError as le:
+            return {'error':404,'error_msg':'Cannot find peer name {}'.format(le)}
+        except Exception as e:
+            return {'error':500,'error_msg':'Error on peer name lookup {}'.format(e)}
+
+        cmd = 'sudo ip netns exec {} ip l del {}'.format(nsname, internal_name)
+        self.os.execute_command(cmd,blocking=True, external=True)
+
+        self.logger.info('delete_virtual_interface_from_namespace()', 'Deleted virtual interface {} from network namespace: {}'.format(internal_name, nsname))
+
+        self.netns.get(nsname).remove(internal_name)
+
+
+        return {'result':{"namespace":nsname, "internal":{"name":internal_name, 'ipv4': '', 'ipv6': '', 'mac': ''}, "external":{"name":peername, 'ipv4': '', 'ipv6': '', 'mac': ''}}}
+
+
+    def assign_address_to_interface_in_namespace(self, intf_name, nsname, address):
+        self.logger.info('assign_address_to_interface_in_namespace()', 'Assign {} to virtual interface {} in network namespace: {}'.format(address, intf_name, nsname))
+        if nsname not in self.netns:
+            self.logger.error('create_virtual_interface_in_namespace()', 'Namespace {} not found'.format(nsname))
+            return {'error':404,'error_msg':'namespace not existing'}
+
+
+        try:
+            peername = self.__get_peername(intf_name, nsname)
+        except LookupError as le:
+            return {'error':404,'error_msg':'Cannot find peer name {}'.format(le)}
+        except Exception as e:
+            return {'error':500,'error_msg':'Error on peer name lookup {}'.format(e)}
+
+
+
+        cmd = 'sudo ip netns exec {} ip addr add {} dev {}'.format(nsname, address, intf_name)
+        self.os.execute_command(cmd,blocking=True, external=True)
+
+        internal_address = self.__get_address(intf_name, nsname).get(intf_name)
+        peer_address =  self.__get_address(peername).get(peername)
+
+        internal_info = {**{"name":intf_name}, **internal_address}
+        peer_info = {**{"name":peername}, **peer_address}
+
+        # {"namespace":string, "internal":{"name":string,'ipv4': '', 'ipv6': '', 'mac': ''}, "external":{"name":string,'ipv4': '', 'ipv6': '', 'mac': ''}}
+
+        return {'result':{"namespace":nsname, "internal":internal_info, "external":peer_info}}
+
+    def assign_mac_address_to_interface_in_namespace(self, intf_name, nsname, address):
+
+        self.logger.info('assign_mac_address_to_interface_in_namespace()', 'Assign {} to virtual interface {} in network namespace: {}'.format(address, intf_name, nsname))
+        if nsname not in self.netns:
+            self.logger.error('assign_mac_address_to_interface_in_namespace()', 'Namespace {} not found'.format(nsname))
+            return {'error':404,'error_msg':'namespace not existing'}
+
+
+        try:
+            peername = self.__get_peername(intf_name, nsname)
+        except LookupError as le:
+            return {'error':404,'error_msg':'Cannot find peer name {}'.format(le)}
+        except Exception as e:
+            return {'error':500,'error_msg':'Error on peer name lookup {}'.format(e)}
+
+        cmd = 'sudo ip netns exec {} ip link set dev {} address {}'.format(nsname, intf_name,address)
+        self.os.execute_command(cmd,blocking=True, external=True)
+
+        internal_address = self.__get_address(intf_name, nsname).get(intf_name)
+        peer_address =  self.__get_address(peername).get(peername)
+
+        internal_info = {**{"name":intf_name}, **internal_address}
+        peer_info = {**{"name":peername}, **peer_address}
+
+        return {'result':{"namespace":nsname, "internal":internal_info, "external":peer_info}}
+
+    def get_address_of_interface_in_namespace(self, intf_name, nsname):
+
+        if nsname not in self.netns:
+            self.logger.error('create_virtual_interface_in_namespace()', 'Namespace {} not found'.format(nsname))
+            return {'error':404,'error_msg':'namespace not existing'}
+
+        cmd = 'sudo ip netns exec {} {}'.format(nsname, os.path.join(self.DIR,'utils','get_addresses.py'))
+        # executing the command
+        res = ''
+        p = psutil.Popen(cmd, stdout=PIPE, executable='/bin/bash', shell=True)
+        p.wait()
+        for line in p.stdout:
+            res = res + line.decode()
+        #
+
+        addresses = json.loads(res)
+        if intf_name not in addresses:
+            return {'error':404,'error_msg':'interface not existing'}
+
+        addr_info = addresses.get(intf_name)
+        return {'result':{**{"name":intf_name}, **addr_info}}
+
+
+    def remove_address_from_interface_in_namespace(self, intf_name, nsname):
+        self.logger.info('remove_address_from_interface_in_namespace()', 'Remove address from virtual interface {} in network namespace: {}'.format(intf_name, nsname))
+        if nsname not in self.netns:
+            self.logger.error('remove_address_from_interface_in_namespace()', 'Namespace {} not found'.format(nsname))
+            return {'error':404,'error_msg':'namespace not existing'}
+
+        try:
+            peername = self.__get_peername(intf_name, nsname)
+        except LookupError as le:
+            return {'error':404,'error_msg':'Cannot find peer name {}'.format(le)}
+        except Exception as e:
+            return {'error':500,'error_msg':'Error on peer name lookup {}'.format(e)}
+
+        cmd = 'sudo ip netns exec {} ip addr flush dev {}'.format(nsname, intf_name)
+        self.os.execute_command(cmd,blocking=True, external=True)
+
+        internal_address = self.__get_address(intf_name, nsname).get(intf_name)
+        peer_address =  self.__get_address(peername).get(peername)
+
+        internal_info = {**{"name":intf_name}, **internal_address}
+        peer_info = {**{"name":peername}, **peer_address}
+
+        # {"namespace":string, "internal":{"name":string,'ipv4': '', 'ipv6': '', 'mac': ''}, "external":{"name":string,'ipv4': '', 'ipv6': '', 'mac': ''}}
+
+        return {'result':{"namespace":nsname, "internal":internal_info, "external":peer_info}}
+
         # ================================= #
+
+
+    def __get_index(self, nsname):
+        self.logger.info('__get_index()', 'Getting index for {}'.format(nsname))
+        faces = self.__get_faces(nsname)
+        ids = []
+
+        for k in faces:
+            ids.append(faces.get(k).get("id"))
+
+        ids.sort(reverse = True)
+        self.logger.info('__get_index()', 'index for {} is '.format(nsname, ids[0]))
+        return ids[0]
+
+    def __get_address(self, intf, netns="default"):
+        self.logger.info('__get_address()', 'Getting address for {} in {}'.format(intf, netns))
+        result = {}
+
+        cmd = os.path.join(self.DIR,'utils','get_addresses.py')
+
+        if netns != "default":
+            if netns not in self.netns:
+                raise LookupError("Namespace not found")
+            cmd = 'sudo ip netns exec {} {}'.format(netns, os.path.join(self.DIR,'utils','get_addresses.py'))
+
+
+         # executing the command
+        res = ''
+        p = psutil.Popen(cmd, stdout=PIPE, executable='/bin/bash', shell=True)
+        p.wait()
+        for line in p.stdout:
+            res = res + line.decode()
+        #
+
+        addresses = json.loads(res)
+        if intf not in addresses:
+            raise LookupError("Interface not found")
+
+        addr_info = addresses.get(intf)
+        return {intf:addr_info}
+
+
+    def __get_peername(self, intf, netns):
+        self.logger.info('__get_peername()', 'Getting peer name for {} in '.format(intf, netns))
+
+        ns_faces = self.__get_faces(netns)
+        default_faces = self.__get_faces()
+        res = None
+
+        if intf not in ns_faces:
+            self.logger.error('__get_peername()', 'Interface {} not found'.format(intf))
+            raise LookupError("Interface not found")
+
+        face_info = ns_faces.get(intf)
+        face_id = face_info.get('id')
+
+        for k,v in default_faces.items():
+            if v.get('at') != '':
+                at = int(v.get('at')[len('if'):])
+                if at == face_id:
+                    res = k
+                    break
+        return res
+
+    def __get_faces(self, namespace="default"):
+        '''
+        Gets the intefaces in the given namespace, if the namespace is None it will get
+        the interfaces from the default namespace
+        ----------
+
+        returns
+        -------
+        dictionary
+            {
+                "name": {
+                    "id": interface id,
+                    "at": "pair interface if present"
+                }
+            }
+        '''
+        self.logger.info('__get_faces()', 'Getting interfaces in {}'.format(namespace))
+        result = {}
+
+        # reg = '^(\d+?)\:'
+
+        regex = '^(\d+?)\:.+?(.+)\@?\:'
+
+        # reg_if = '\@(.+?)\:'
+
+        cmd = 'ip l'
+
+        if namespace != "default":
+            if namespace not in self.netns:
+                self.logger.error('create_virtual_interface_in_namespace()', 'Namespace {} not found'.format(namespace))
+                return {'error':404,'error_msg':'namespace not existing'}
+            cmd = 'sudo ip netns exec {} ip l'.format(namespace)
+
+        # executing the command
+        res = ''
+        p = psutil.Popen(cmd, stdout=PIPE, executable='/bin/bash', shell=True)
+        p.wait()
+        for line in p.stdout:
+            res = res + line.decode()
+        #
+        pattern =  re.compile(regex,re.MULTILINE)
+        matches = re.finditer(pattern, res)
+        for m in matches:
+            ifid = int(m.group(1))
+            ifname = m.group(2)
+            at = ''
+            if '@' in ifname:
+                ifname = m.group(2).split('@')[0]
+                at = m.group(2).split('@')[1]
+            result.update({ifname:{"id":ifid, "at":at}})
+
+        self.logger.info('__get_faces()', 'result is {}'.format(result))
+        return result
+
 
     def __get_cp_ip(self, cp_id):
         cp_rec = self.connector.loc.actual.get_node_port(self.node, self.uuid, cp_id)
