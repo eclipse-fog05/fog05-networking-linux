@@ -1124,6 +1124,64 @@ class LinuxBridge(NetworkPlugin):
 
         return {'result': nsname}
 
+    def move_interface_in_namespace(self, intf_name, nsname):
+        self.logger.info('move_interface_in_namespace()', 'Moving {} into {}'.format(intf_name, nsname))
+        if (nsname != '1' or nsname !='default') and nsname not in self.netns:
+            self.logger.error('move_interface_in_namespace()', 'Namespace {} not found'.format(nsname))
+            return {'error':404,'error_msg':'namespace not existing'}
+
+        current_ns = self.__lookup_interface_namespace(intf_name).get("netns")
+        if current_ns is None:
+            self.logger.error('move_interface_in_namespace()', 'Interface {} not found'.format(intf_name))
+            return {'error':404,'error_msg':'interface not existing'}
+
+        cmd = "sudo ip netns exec {} ip link set dev {} netns {}".format(current_ns, intf_name, nsname)
+        if current_ns == "default":
+             cmd = "sudo ip link set dev {} netns {}".format(intf_name, nsname)
+        self.os.execute_command(cmd,blocking=True, external=True)
+
+        res = self.get_address_of_interface_in_namespace(intf_name, nsname).get('result')
+
+        res.update({"namespace":nsname})
+        return {"result":res}
+
+    def attach_interface_to_bridge(self, intf_name, br_name):
+
+        self.logger.info('attach_interface_to_bridge()', 'Attaching {} to {}'.format(intf_name, br_name))
+
+        current_ns = self.__lookup_interface_namespace(intf_name).get("netns")
+        if current_ns is None:
+            self.logger.error('attach_interface_to_bridge()', 'Interface {} not found'.format(intf_name))
+            return {'error':404,'error_msg':'interface not existing'}
+
+        cmd = "sudo ip netns exec {} ip link set dev {} master {}".format(current_ns, intf_name, br_name)
+        if current_ns == "default":
+             cmd = "sudo ip link set dev {} master {}".format(intf_name, br_name)
+        self.os.execute_command(cmd,blocking=True, external=True)
+
+        res = self.get_address_of_interface_in_namespace(intf_name, current_ns).get('result')
+
+        res.update({"namespace":current_ns,"bridge":br_name})
+        return {"result":res}
+
+    def detach_interface_from_bridge(self, intf_name):
+        self.logger.info('detach_interface_from_bridge()', 'Detaching {}'.format(intf_name))
+
+        current_ns = self.__lookup_interface_namespace(intf_name).get("netns")
+        if current_ns is None:
+            self.logger.error('detach_interface_from_bridge()', 'Interface {} not found'.format(intf_name))
+            return {'error':404,'error_msg':'interface not existing'}
+
+        cmd = "sudo ip netns exec {} ip link set dev {} nomaster".format(current_ns, intf_name)
+        if current_ns == "default":
+             cmd = "sudo ip link set dev {} nomaster".format(intf_name)
+        self.os.execute_command(cmd,blocking=True, external=True)
+
+        res = self.get_address_of_interface_in_namespace(intf_name, current_ns).get('result')
+
+        res.update({"namespace":current_ns})
+        return {"result":res}
+
     def create_virtual_interface_in_namespace(self, internal_name, nsname):
         self.logger.info('create_virtual_interface_in_namespace()', 'Creating new virtual interface {} in network namespace: {}'.format(internal_name, nsname))
         if nsname not in self.netns:
@@ -1252,6 +1310,10 @@ class LinuxBridge(NetworkPlugin):
             return {'error':404,'error_msg':'namespace not existing'}
 
         cmd = 'sudo ip netns exec {} {}'.format(nsname, os.path.join(self.DIR,'utils','get_addresses.py'))
+        if nsname == '1' or nsname =='default':
+            cmd = "sudo {}".format(os.path.join(self.DIR,'utils','get_addresses.py'))
+
+
         # executing the command
         res = ''
         p = psutil.Popen(cmd, stdout=PIPE, executable='/bin/bash', shell=True)
@@ -1282,6 +1344,9 @@ class LinuxBridge(NetworkPlugin):
             return {'error':500,'error_msg':'Error on peer name lookup {}'.format(e)}
 
         cmd = 'sudo ip netns exec {} ip addr flush dev {}'.format(nsname, intf_name)
+        if nsname == '1' or nsname =='default':
+            cmd = 'sudo ip addr flush dev {}'.format(intf_name)
+
         self.os.execute_command(cmd,blocking=True, external=True)
 
         internal_address = self.__get_address(intf_name, nsname).get(intf_name)
@@ -1413,6 +1478,65 @@ class LinuxBridge(NetworkPlugin):
         self.logger.info('__get_faces()', 'result is {}'.format(result))
         return result
 
+    def __lookup_interface_namespace(self, intf_name):
+        result = {}
+        regex = '^(\d+?)\:.+?(.+)\@?\:'
+
+        cmd = 'ip netns'
+
+        nss = []
+        # executing the command
+        res = ''
+        p = psutil.Popen(cmd, stdout=PIPE, executable='/bin/bash', shell=True)
+        p.wait()
+        for line in p.stdout:
+            nss.append(line.decode().strip())
+        #
+
+        # lookup in default ns
+        cm = 'ip l'
+
+        # executing the command
+        res = ''
+        p = psutil.Popen(cmd, stdout=PIPE, executable='/bin/bash', shell=True)
+        p.wait()
+        for line in p.stdout:
+            res = res + line.decode()
+        #
+        pattern =  re.compile(regex,re.MULTILINE)
+        for m in re.finditer(pattern, res):
+
+            ifid = int(m.group(1))
+            ifname = m.group(2)
+            if '@' in ifname:
+                ifname = m.group(2).split('@')[0]
+            if ifname == intf_name:
+                result.update({"name":ifname, "netns":"1"})
+                break
+
+
+        for ns in nss:
+
+            cmd = 'sudo ip netns exec {} ip l'.format(ns)
+
+            # executing the command
+            res = ''
+            p = psutil.Popen(cmd, stdout=PIPE, executable='/bin/bash', shell=True)
+            p.wait()
+            for line in p.stdout:
+                res = res + line.decode()
+            #
+            pattern =  re.compile(regex,re.MULTILINE)
+            for m in re.finditer(pattern, res):
+
+                ifid = int(m.group(1))
+                ifname = m.group(2)
+                if '@' in ifname:
+                    ifname = m.group(2).split('@')[0]
+                if ifname == intf_name:
+                    result.update({"name":ifname, "netns":ns})
+                    break
+        return result
 
     def __get_cp_ip(self, cp_id):
         cp_rec = self.connector.loc.actual.get_node_port(self.node, self.uuid, cp_id)
