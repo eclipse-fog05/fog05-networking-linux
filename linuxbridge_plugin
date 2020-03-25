@@ -1187,7 +1187,7 @@ class LinuxBridge(NetworkPlugin):
         return {'result':{"namespace":nsname, "internal":{"name":internal_name, 'ipv4': '', 'ipv6': '', 'mac': ''}, "external":{"name":peername, 'ipv4': '', 'ipv6': '', 'mac': ''}}}
 
 
-    def assign_address_to_interface_in_namespace(self, intf_name, nsname, address):
+    def assign_address_to_interface_in_namespace(self, intf_name, nsname, address=None):
         self.logger.info('assign_address_to_interface_in_namespace()', 'Assign {} to virtual interface {} in network namespace: {}'.format(address, intf_name, nsname))
         if nsname not in self.netns:
             self.logger.error('create_virtual_interface_in_namespace()', 'Namespace {} not found'.format(nsname))
@@ -1202,8 +1202,11 @@ class LinuxBridge(NetworkPlugin):
             return {'error':500,'error_msg':'Error on peer name lookup {}'.format(e)}
 
 
-
         cmd = 'sudo ip netns exec {} ip addr add {} dev {}'.format(nsname, address, intf_name)
+        if address is None:
+            self.logger.info('assign_address_to_interface_in_namespace()', 'Address is None using DHCP to get an address')
+            cmd = 'sudo ip netns exec {} dhclient {}'.format(nsname, intf_name)
+
         self.os.execute_command(cmd,blocking=True, external=True)
 
         internal_address = self.__get_address(intf_name, nsname).get(intf_name)
