@@ -143,6 +143,9 @@ class LinuxBridge(NetworkPlugin):
             'get_address_of_interface_in_namespace': self.get_address_of_interface_in_namespace,
             'remove_address_from_interface_in_namespace': self.remove_address_from_interface_in_namespace,
             'assign_mac_address_to_interface_in_namespace': self.assign_mac_address_to_interface_in_namespace,
+            'move_interface_in_namespace': self.move_interface_in_namespace,
+            'attach_interface_to_bridge': self.attach_interface_to_bridge,
+            'detach_interface_from_bridge': self.detach_interface_from_bridge,
         }
 
         for k in d:
