@@ -1384,7 +1384,7 @@ class LinuxBridge(NetworkPlugin):
 
         cmd = os.path.join(self.DIR,'utils','get_addresses.py')
 
-        if netns != "default":
+        if netns != 'default' or netns != '1':
             if netns not in self.netns:
                 raise LookupError("Namespace not found")
             cmd = 'sudo ip netns exec {} {}'.format(netns, os.path.join(self.DIR,'utils','get_addresses.py'))
