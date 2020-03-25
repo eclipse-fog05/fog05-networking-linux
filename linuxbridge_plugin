@@ -135,6 +135,7 @@ class LinuxBridge(NetworkPlugin):
             # fuctions called by agent for CPs
             'create_port_agent': self.create_port_from_descriptor,
             'destroy_port_agent':self.destroy_port_agent,
+            # network namespace and virtual interface management
             'create_network_namespace':self.create_network_namespace,
             'delete_network_namespace':self.delete_network_namespace,
             'create_virtual_interface_in_namespace':self.create_virtual_interface_in_namespace,
@@ -1482,6 +1483,7 @@ class LinuxBridge(NetworkPlugin):
         return result
 
     def __lookup_interface_namespace(self, intf_name):
+        self.logger.info('__lookup_interface_namespace()', 'Lookup namespace for {}'.format(intf_name))
         result = {}
         regex = '^(\d+?)\:.+?(.+)\@?\:'
 
@@ -1539,6 +1541,7 @@ class LinuxBridge(NetworkPlugin):
                 if ifname == intf_name:
                     result.update({"name":ifname, "netns":ns})
                     break
+        self.logger.info('__lookup_interface_namespace()', '{} is in {}'.format(intf_name, result.get('netns')))
         return result
 
     def __get_cp_ip(self, cp_id):
