@@ -31,6 +31,7 @@ import hashlib
 import psutil
 import netifaces
 import re
+import traceback
 from subprocess import PIPE
 from jinja2 import Environment
 from fog05_sdk.interfaces.NetworkPlugin import *
@@ -195,6 +196,8 @@ class LinuxBridge(NetworkPlugin):
             self.delete_router(k)
         for k in list(self.floating_ips.keys()):
             self.delete_floating_ip(k)
+        for k in list(self.netns.keys()):
+            self.delete_network_namespace(k)
 
 
     def get_overlay_face(self):
@@ -1372,8 +1375,12 @@ class LinuxBridge(NetworkPlugin):
         try:
             peername = self.__get_peername(intf_name, nsname)
         except LookupError as le:
+            self.logger.error('assign_mac_address_to_interface_in_namespace()', 'Error {}'.format(le))
+            traceback.print_exc()
             return {'error':404,'error_msg':'Cannot find peer name {}'.format(le)}
         except Exception as e:
+            self.logger.error('assign_mac_address_to_interface_in_namespace()', 'Error {}'.format(e))
+            traceback.print_exc()
             return {'error':500,'error_msg':'Error on peer name lookup {}'.format(e)}
 
         cmd = 'sudo ip netns exec {} ip link set dev {} address {}'.format(nsname, intf_name,address)
@@ -1485,12 +1492,11 @@ class LinuxBridge(NetworkPlugin):
 
 
     def __get_peername(self, intf, netns):
-        self.logger.info('__get_peername()', 'Getting peer name for {} in '.format(intf, netns))
+        self.logger.info('__get_peername()', 'Getting peer name for {} in {}'.format(intf, netns))
 
         ns_faces = self.__get_faces(netns)
         default_faces = self.__get_faces()
         res = None
-
         if intf not in ns_faces:
             self.logger.error('__get_peername()', 'Interface {} not found'.format(intf))
             raise LookupError("Interface not found")
@@ -1500,10 +1506,11 @@ class LinuxBridge(NetworkPlugin):
 
         for k,v in default_faces.items():
             if v.get('at') != '':
-                at = int(v.get('at')[len('if'):])
-                if at == face_id:
-                    res = k
-                    break
+                if v.get('at').startswith('if'):
+                    at = int(v.get('at')[len('if'):])
+                    if at == face_id:
+                        res = k
+                        break
         return res
 
     def __get_faces(self, namespace="default"):
