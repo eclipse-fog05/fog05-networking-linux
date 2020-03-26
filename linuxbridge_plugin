@@ -149,7 +149,9 @@ class LinuxBridge(NetworkPlugin):
             'move_interface_in_namespace': self.move_interface_in_namespace,
             'attach_interface_to_bridge': self.attach_interface_to_bridge,
             'detach_interface_from_bridge': self.detach_interface_from_bridge,
-            'rename_virtual_interface_in_namespace': self.rename_virtual_interface_in_namespace
+            'rename_virtual_interface_in_namespace': self.rename_virtual_interface_in_namespace,
+            'create_macvlan_interface': self.create_macvlan_interface,
+            'delete_macvlan_interface': self.delete_macvlan_interface
         }
 
         for k in d:
@@ -1287,9 +1289,11 @@ class LinuxBridge(NetworkPlugin):
             cmd = 'sudo ip netns exec {} ip link set {} up'.format(nsname, newname)
             self.os.execute_command(cmd,blocking=True, external=True)
 
-            self.netns.get(nsname).remove(name)
+            if name in self.netns.get(nsname):
+                self.netns.get(nsname).remove(name)
             self.netns.get(nsname).append(newname)
 
+        self.logger.info('rename_virtual_interface_in_namespace()', 'Done renaming')
         return {'result':newname}
 
     def delete_virtual_interface_from_namespace(self, internal_name, nsname):
@@ -1341,7 +1345,10 @@ class LinuxBridge(NetworkPlugin):
         self.os.execute_command(cmd,blocking=True, external=True)
 
         internal_address = self.__get_address(intf_name, nsname).get(intf_name)
-        peer_address =  self.__get_address(peername).get(peername)
+
+        peer_address = None
+        if peername is not None:
+            peer_address =  self.__get_address(peername).get(peername)
 
         internal_info = {**{"name":intf_name}, **internal_address}
 
@@ -1380,7 +1387,7 @@ class LinuxBridge(NetworkPlugin):
         return {'result':{"namespace":nsname, "internal":internal_info, "external":peer_info}}
 
     def get_address_of_interface_in_namespace(self, intf_name, nsname):
-        self.logger.error('get_address_of_interface_in_namespace()', 'Getting address for {} in {}'.format(intf_name, nsname))
+        self.logger.info('get_address_of_interface_in_namespace()', 'Getting address for {} in {}'.format(intf_name, nsname))
         if nsname not in self.netns and (nsname != '1' and nsname != 'default'):
             self.logger.error('get_address_of_interface_in_namespace()', 'Namespace {} not found'.format(nsname))
             return {'error':404,'error_msg':'namespace not existing'}
