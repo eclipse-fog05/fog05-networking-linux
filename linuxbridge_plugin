@@ -87,6 +87,8 @@ class LinuxBridge(NetworkPlugin):
         self.routers = {}
         self.floating_ips = {}
 
+        self.renamed_intfs = {}
+
         signal.signal(signal.SIGINT, self.__catch_signal)
         signal.signal(signal.SIGTERM, self.__catch_signal)
 
@@ -146,7 +148,8 @@ class LinuxBridge(NetworkPlugin):
             'assign_mac_address_to_interface_in_namespace': self.assign_mac_address_to_interface_in_namespace,
             'move_interface_in_namespace': self.move_interface_in_namespace,
             'attach_interface_to_bridge': self.attach_interface_to_bridge,
-            'detach_interface_from_bridge': self.detach_interface_from_bridge
+            'detach_interface_from_bridge': self.detach_interface_from_bridge,
+            'rename_virtual_interface_in_namespace': self.rename_virtual_interface_in_namespace
         }
 
         for k in d:
@@ -1094,6 +1097,34 @@ class LinuxBridge(NetworkPlugin):
         return {'result':rec}
 
 
+    def create_macvlan_interface(self, master_intf):
+        intf_name = 'macvlan-{}-{}'.format(master_intf, self.__get_index('1'))
+        self.logger.info('create_macvlan_interface()', 'Creating new MACVLAN interface {} over {}'.format(intf_name, master_intf))
+        # sudo ip link add wan-$1 link $2 type macvlan mode vepa
+
+        cmd = 'sudo ip link add {} link {} type macvlan mode vepa'.format(intf_name, master_intf)
+        self.os.execute_command(cmd,blocking=True, external=True)
+
+        cmd = 'sudo ip link set {} up'.format(intf_name)
+        self.os.execute_command(cmd,blocking=True, external=True)
+
+
+        return {'result':intf_name}
+
+    def delete_macvlan_interface(self, intf_name, netns='1'):
+        self.logger.info('delete_macvlan_interface()', 'Removing {}'.format(intf_name))
+        if (netns != '1' and netns !='default') and netns not in self.netns:
+            self.logger.error('delete_macvlan_interface()', 'Namespace {} not found'.format(netns))
+            return {'error':404,'error_msg':'namespace not existing'}
+
+        cmd = 'sudo ip link del {}'.format(intf_name)
+        if netns !='default' and netns !='1':
+            cmd = 'sudo ip netns exec {} ip link del {}'.format(netns, intf_name)
+
+        self.os.execute_command(cmd,blocking=True, external=True)
+
+        return {'result':intf_name}
+
 
     def create_network_namespace(self):
         index = self.ns_index
@@ -1142,6 +1173,12 @@ class LinuxBridge(NetworkPlugin):
         cmd = "sudo ip netns exec {} ip link set dev {} netns {}".format(current_ns, intf_name, nsname)
         if current_ns == 'default' or current_ns == '1':
              cmd = "sudo ip link set dev {} netns {}".format(intf_name, nsname)
+             if intf_name in self.renamed_intfs:
+                realname = self.renamed_intfs.get(intf_name)
+                self.rename_virtual_interface_in_namespace(intf_name, realname, '1')
+                self.renamed_intfs.pop(intf_name)
+                self.renamed_intfs.pop(realname)
+
         self.os.execute_command(cmd,blocking=True, external=True)
 
         res = self.get_address_of_interface_in_namespace(intf_name, nsname).get('result')
@@ -1222,7 +1259,38 @@ class LinuxBridge(NetworkPlugin):
 
         return {'result':{"namespace":nsname, "internal":internal_info, "external":peer_info}}
 
+    def rename_virtual_interface_in_namespace(self, name, newname, nsname):
+        self.logger.info('rename_virtual_interface_in_namespace()', 'Rename {} into {} - namespace {}'.format(name, newname, nsname))
+        if nsname not in self.netns and (nsname != '1' and nsname != 'default'):
+            self.logger.error('rename_virtual_interface_in_namespace()', 'Namespace {} not found'.format(nsname))
+            return {'error':404,'error_msg':'namespace not existing'}
 
+        if nsname == 'default' or nsname == '1':
+            cmd = 'sudo ip link set {} down'.format(name)
+            self.os.execute_command(cmd,blocking=True, external=True)
+
+            cmd = 'sudo ip link set {} name {}'.format(name, newname)
+            self.os.execute_command(cmd,blocking=True, external=True)
+
+            cmd = 'sudo ip link set {} up'.format(newname)
+            self.os.execute_command(cmd,blocking=True, external=True)
+
+            self.renamed_intfs.update({newname: name})
+
+        else:
+            cmd = 'sudo ip netns exec {} ip link set {} down'.format(nsname, name)
+            self.os.execute_command(cmd,blocking=True, external=True)
+
+            cmd = 'sudo ip netns exec {} ip link set {} name {}'.format(nsname, name, newname)
+            self.os.execute_command(cmd,blocking=True, external=True)
+
+            cmd = 'sudo ip netns exec {} ip link set {} up'.format(nsname, newname)
+            self.os.execute_command(cmd,blocking=True, external=True)
+
+            self.netns.get(nsname).remove(name)
+            self.netns.get(nsname).append(newname)
+
+        return {'result':newname}
 
     def delete_virtual_interface_from_namespace(self, internal_name, nsname):
         self.logger.info('delete_virtual_interface_from_namespace()', 'Removing virtual interface {} from network namespace: {}'.format(internal_name, nsname))
@@ -1262,6 +1330,8 @@ class LinuxBridge(NetworkPlugin):
         except Exception as e:
             return {'error':500,'error_msg':'Error on peer name lookup {}'.format(e)}
 
+        cmd = 'sudo ip netns exec {} sudo ip link set {} up'.format(nsname, intf_name)
+        self.os.execute_command(cmd,blocking=True, external=True)
 
         cmd = 'sudo ip netns exec {} ip addr add {} dev {}'.format(nsname, address, intf_name)
         if address is None:
@@ -1274,7 +1344,10 @@ class LinuxBridge(NetworkPlugin):
         peer_address =  self.__get_address(peername).get(peername)
 
         internal_info = {**{"name":intf_name}, **internal_address}
-        peer_info = {**{"name":peername}, **peer_address}
+
+        peer_info = None
+        if peer_address is not None:
+            peer_info = {**{"name":peername}, **peer_address}
 
         # {"namespace":string, "internal":{"name":string,'ipv4': '', 'ipv6': '', 'mac': ''}, "external":{"name":string,'ipv4': '', 'ipv6': '', 'mac': ''}}
 
@@ -1452,7 +1525,7 @@ class LinuxBridge(NetworkPlugin):
 
         cmd = 'ip l'
 
-        if namespace != "default":
+        if namespace != 'default' and namespace != '1':
             if namespace not in self.netns:
                 self.logger.error('create_virtual_interface_in_namespace()', 'Namespace {} not found'.format(namespace))
                 return {'error':404,'error_msg':'namespace not existing'}
