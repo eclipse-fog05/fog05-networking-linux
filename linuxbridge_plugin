@@ -1314,7 +1314,8 @@ class LinuxBridge(NetworkPlugin):
 
         self.logger.info('delete_virtual_interface_from_namespace()', 'Deleted virtual interface {} from network namespace: {}'.format(internal_name, nsname))
 
-        self.netns.get(nsname).remove(internal_name)
+        if internal_name in self.netns.get(nsname):
+            self.netns.get(nsname).remove(internal_name)
 
 
         return {'result':{"namespace":nsname, "internal":{"name":internal_name, 'ipv4': '', 'ipv6': '', 'mac': ''}, "external":{"name":peername, 'ipv4': '', 'ipv6': '', 'mac': ''}}}
