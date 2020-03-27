@@ -37,3 +37,5 @@ sudo ip link set dev vxl-{{ net_id }} master br-{{ net_id }}
 sudo ip link set up dev br-{{ net_id }}
 sudo ip link set up dev vxl-{{ net_id }}
 sudo ethtool --offload br-{{ net_id }} rx off tx off
+echo 0 | sudo tee /sys/devices/virtual/net/br-{{ net_id }}/bridge/multicast_snooping
+sudo ip netns exec fosns-{{ net_id }} bash -c "echo 0 | sudo tee /sys/devices/virtual/net/br-{{ net_id }}-ns/bridge/multicast_snooping"
