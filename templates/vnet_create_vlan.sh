@@ -24,3 +24,4 @@ sudo ip link set dev {{ vlan_intf }}  master br-{{ net_id }}
 sudo ip link set up dev br-{{ net_id }}
 sudo ip link set up dev {{ vlan_intf }}
 sudo ethtool --offload br-{{ net_id }} rx off tx off
+echo 0 | sudo tee /sys/devices/virtual/net/br-{{ net_id }}/bridge/multicast_snooping
