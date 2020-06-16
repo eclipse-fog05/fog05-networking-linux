@@ -1133,7 +1133,7 @@ class LinuxBridge(NetworkPlugin):
 
     def create_network_namespace(self):
         index = self.ns_index
-        nsname = 'f-{}'.format(index)
+        nsname = 'fns-{}'.format(index)
 
         self.logger.info('create_network_namespace()', 'Creating new network namespace: {}'.format(nsname))
 
