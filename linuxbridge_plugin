@@ -152,7 +152,11 @@ class LinuxBridge(NetworkPlugin):
             'detach_interface_from_bridge': self.detach_interface_from_bridge,
             'rename_virtual_interface_in_namespace': self.rename_virtual_interface_in_namespace,
             'create_macvlan_interface': self.create_macvlan_interface,
-            'delete_macvlan_interface': self.delete_macvlan_interface
+            'delete_macvlan_interface': self.delete_macvlan_interface,
+            'create_bridge_interface': self.create_bridge_inteface,
+            'delete_bridge_interface': self.delete_bridge_interface,
+            'create_vxlan_interface': self.create_vxlan_interface,
+            'delete_vxlan_interface': self.delete_vxlan_interface,
         }
 
         for k in d:
@@ -1120,6 +1124,59 @@ class LinuxBridge(NetworkPlugin):
         self.logger.info('delete_macvlan_interface()', 'Removing {}'.format(intf_name))
         if (netns != '1' and netns !='default') and netns not in self.netns:
             self.logger.error('delete_macvlan_interface()', 'Namespace {} not found'.format(netns))
+            return {'error':404,'error_msg':'namespace not existing'}
+
+        cmd = 'sudo ip link del {}'.format(intf_name)
+        if netns !='default' and netns !='1':
+            cmd = 'sudo ip netns exec {} ip link del {}'.format(netns, intf_name)
+
+        self.os.execute_command(cmd,blocking=True, external=True)
+
+        return {'result':intf_name}
+
+    def create_bridge_interface(self, brname):
+        intf_name = brname
+        self.logger.info('create_bridge_interface()', 'Creating new Bridge interface {}'.format(intf_name))
+
+        cmd = 'sudo ip link add {} type bridge mode vepa'.format(intf_name)
+        self.os.execute_command(cmd,blocking=True, external=True)
+
+        cmd = 'sudo ip link set {} up'.format(intf_name)
+        self.os.execute_command(cmd,blocking=True, external=True)
+
+        return {'result':intf_name}
+
+    def delete_bridge_interface(self, intf_name, netns='1'):
+        self.logger.info('delete_bridge_interface()', 'Removing {}'.format(intf_name))
+        if (netns != '1' and netns !='default') and netns not in self.netns:
+            self.logger.error('delete_bridge_interface()', 'Namespace {} not found'.format(netns))
+            return {'error':404,'error_msg':'namespace not existing'}
+
+        cmd = 'sudo ip link del {}'.format(intf_name)
+        if netns !='default' and netns !='1':
+            cmd = 'sudo ip netns exec {} ip link del {}'.format(netns, intf_name)
+
+        self.os.execute_command(cmd,blocking=True, external=True)
+
+        return {'result':intf_name}
+
+
+    def create_vxlan_interface(self, vni, mcast_group, port, master_intf):
+        intf_name = 'fos-vxl-{}'.format(self.__get_index('1'))
+        self.logger.info('create_vxlan_interface()', 'Creating new VxLAN interface {} - VNI: {} Multicast Group: {} Port: {} Master Interface: {} '.format(intf_name, vni, mcast_group, port, master_intf))
+
+        cmd = 'sudo ip link add {} type vxlan id {} group {} dstport {} dev {}'.format(intf_name, vni, mcast_group, port, master_intf)
+        self.os.execute_command(cmd,blocking=True, external=True)
+
+        cmd = 'sudo ip link set {} up'.format(intf_name)
+        self.os.execute_command(cmd,blocking=True, external=True)
+
+        return {'result':intf_name}
+
+    def delete_vxlan_interface(self, intf_name, netns='1'):
+        self.logger.info('delete_vxlan_interface()', 'Removing {}'.format(intf_name))
+        if (netns != '1' and netns !='default') and netns not in self.netns:
+            self.logger.error('delete_bridge_interface()', 'Namespace {} not found'.format(netns))
             return {'error':404,'error_msg':'namespace not existing'}
 
         cmd = 'sudo ip link del {}'.format(intf_name)
