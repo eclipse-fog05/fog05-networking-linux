@@ -32,10 +32,10 @@ sudo ip netns exec  fosns-{{ net_id }} ip link set br-{{ net_id }}-ns up
 sudo ip netns exec fosns-{{ net_id }} ip link set l-{{ net_id }}-e master br-{{ net_id }}-ns
 sudo ip netns exec fosns-{{ net_id }} ip link set l-{{ net_id }}-e up
 
-sudo ip link add name vxl-{{ net_id }} type vxlan id {{ group_id }} group {{ mcast_group_address }} dstport 4789 dev {{ wan }}
+sudo ip link add name vxl-{{ net_id }} type vxlan id {{ group_id }} group {{ mcast_group_address }} dstport {{ port }} dev {{ wan }}
 sudo ip link set dev vxl-{{ net_id }} master br-{{ net_id }}
 sudo ip link set up dev br-{{ net_id }}
 sudo ip link set up dev vxl-{{ net_id }}
-sudo ethtool --offload br-{{ net_id }} rx off tx off
+# sudo ethtool --offload br-{{ net_id }} rx off tx off
 echo 0 | sudo tee /sys/devices/virtual/net/br-{{ net_id }}/bridge/multicast_snooping
 sudo ip netns exec fosns-{{ net_id }} bash -c "echo 0 | sudo tee /sys/devices/virtual/net/br-{{ net_id }}-ns/bridge/multicast_snooping"

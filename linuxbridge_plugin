@@ -743,8 +743,12 @@ class LinuxBridge(NetworkPlugin):
         if 'overlay' in manifest:
             overlay = manifest['overlay']
 
+        port = 4789
+        if 'port' in manifest:
+            port = manifest['port']
+
         if overlay:
-            start_file  = self.__generate_vnet_start_script2(n_small_id, net_uuid, vni, mcast_addr, face)
+            start_file  = self.__generate_vnet_start_script2(n_small_id, net_uuid, vni, mcast_addr, port, face)
             shutdown_file = self.__generate_vnet_stop_script2(n_small_id)
             self.os.execute_command(os.path.join(self.BASE_DIR, start_file),blocking=True, external=True)
             properties.update({'vxlan_id': vni})
@@ -1891,11 +1895,11 @@ class LinuxBridge(NetworkPlugin):
         self.os.execute_command(chmod_cmd,blocking=True, external=False)
         return f_name
 # ########################## NEW SCRIPT CREATION FUNCTIONS:
-    def __generate_vnet_start_script2(self, netid, net_uuid, vxlan_id, mcast_addr, overlay_interface):
+    def __generate_vnet_start_script2(self, netid, net_uuid, vxlan_id, mcast_addr, port, overlay_interface):
 
         template_sh = self.os.read_file(os.path.join(self.DIR, 'templates', 'vnet_create.sh'))
         net_sh = Environment().from_string(template_sh)
-        net_sh = net_sh.render(net_id=netid, group_id=vxlan_id, mcast_group_address=mcast_addr, wan=overlay_interface)
+        net_sh = net_sh.render(net_id=netid, group_id=vxlan_id, mcast_group_address=mcast_addr, wan=overlay_interface, port=port)
 
         f_name = 'start_{}.sh'.format(netid)
         self.os.store_file(net_sh, self.BASE_DIR, f_name)
