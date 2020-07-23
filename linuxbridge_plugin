@@ -1194,7 +1194,8 @@ class LinuxBridge(NetworkPlugin):
 
     def create_network_namespace(self):
         index = self.ns_index
-        nsname = 'fosns-{}'.format(index)
+        # nsname = 'fosns-{}'.format(index)
+        nsname = 'fns-{}'.format(index)
 
         self.logger.info('create_network_namespace()', 'Creating new network namespace: {}'.format(nsname))
 
@@ -1298,7 +1299,8 @@ class LinuxBridge(NetworkPlugin):
         index = self.__get_index(nsname)
         self.logger.info('create_virtual_interface_in_namespace()', 'Index: {}'.format(index))
 
-        peername = 'veth-{}-{}'.format(nsname,index)
+        #peername = 'veth-{}-{}'.format(nsname,index)
+        peername = 'v-{}-{}'.format(nsname,index)
 
         cmd = 'sudo ip netns exec {} ip l add {} type veth peer name {}'.format(nsname, internal_name, peername)
         self.os.execute_command(cmd,blocking=True, external=True)
