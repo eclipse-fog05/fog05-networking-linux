@@ -85,3 +85,5 @@ assets = [
 [package.metadata.deb.systemd-units]
 unit-scripts = "resources/"
 unit-name = "fos-net-linux.service"
+
+conf-files = ["/etc/fos/linux-network/config.yaml"]

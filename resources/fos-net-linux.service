@@ -1,7 +1,5 @@
 [unit]
 Description = Eclipse fog05 LinuxBridge Plugin
-After=fos_agent.target
-
 
 [Service]
 Type=simple
@@ -12,6 +10,6 @@ Restart=on-failure
 User=root
 StandardOutput=syslog
 StandardError=syslog
-SyslogIdentifier=fos_linuxbridge
+SyslogIdentifier=fos-net-linux
 [Install]
 WantedBy=multi-user.target
