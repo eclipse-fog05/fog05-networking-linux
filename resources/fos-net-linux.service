@@ -5,11 +5,11 @@ After=fos_agent.target
 
 [Service]
 Type=simple
-PIDFile=/var/fos/linuxbridge.pid
-ExecStart = /etc/fos/plugins/plugin-net-linuxbridge/linuxbridge_plugin /etc/fos/plugins/plugin-net-linuxbridge/linuxbridge_plugin.json
+PIDFile=/var/fos/fos-net-linux.pid
+ExecStart = /usr/bin/fos-net-linux -c /etc/fos/linux-network/config.yaml
 KillMode=process
 Restart=on-failure
-User=fos
+User=root
 StandardOutput=syslog
 StandardError=syslog
 SyslogIdentifier=fos_linuxbridge

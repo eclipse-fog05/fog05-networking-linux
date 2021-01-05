@@ -1,0 +1,87 @@
+[package]
+name = "fog05-networking-linux"
+version = "0.3.0-alpha1"
+repository = "https://github.com/eclipse-fog05/fog05-networking-linux"
+homepage = "http://fog05.io"
+authors = ["gabrik <gabriele.baldoni@gmail.com>"]
+edition = "2018"
+license = " EPL-2.0 OR Apache-2.0"
+readme = "README.md"
+description = "Eclipse fog05 Linux Networking Plugin"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+async-std = { version = "=1.8.0", features = ["attributes"] }
+zenoh = { git = "https://github.com/eclipse-zenoh/zenoh.git", branch = "master" }
+async-trait = "0.1.36"
+futures = "0.3.5"
+thiserror = "1.0"
+serde_derive = "1.0.55"
+serde = { version = "1.0.55", features = ["derive"] }
+serde_json = { version = "1.0.55"}
+serde_yaml = "0.8.13"
+bincode = "1.3.1"
+rtnetlink = { git = "https://github.com/gabrik/netlink", branch = "feature-ns-add-remove" }
+netlink-packet-route = { git = "https://github.com/gabrik/netlink", branch = "feature-ns-add-remove" }
+tokio = { version = "0.2.6", features = ["macros", "rt-core"] }
+derive_more = "0.99.10"
+semver = { version = "0.11.0", features = ["serde"]}
+uuid = { version = "0.8.1", features = ["serde", "v4"] }
+base64 = "0.12.3"
+url = "2.1.1"
+mac_address = {version =  "1.1.1", features = ["serde"]}
+zrpc = { git = "https://github.com/eclipse-fog05/fog05.git", branch = "master" }
+zrpc-macros = { git = "https://github.com/eclipse-fog05/fog05.git", branch = "master" }
+fog05-sdk = { git = "https://github.com/eclipse-fog05/fog05.git", branch = "master" }
+async-ctrlc ={version = "1.2.0", features = ["stream"]}
+reqwest = { version = "0.10", features = ["blocking", "json"] }
+rand = "0.7.3"
+nix = "0.19.0"
+clap = "2.33"
+structopt = "0.3.13"
+log = "0.4"
+env_logger = "0.7.1"
+git-version = "0.3.4"
+tera = "1.5.0"
+nftnl = "0.6.0"
+ipnetwork = "0.17.0"
+mnl = "0.2"
+signal-hook = "0.2.1"
+signal-hook-async-std = "0.1.0"
+
+[[bin]]
+name = "linux-networking"
+path = "bin/linux-networking.rs"
+test = false
+bench = false
+
+
+[[bin]]
+name = "fos-net-linux-ns-manager"
+path = "bin/fos-net-linux-ns-manager.rs"
+test = false
+bench = false
+
+
+[package.metadata.deb]
+maintainer = "ADLINK fog05 team <fog05@adlink-labs.tech>"
+copyright = "2020, ADLINK Technology Inc"
+extended-description = "Eclipse fog05 Linux Networking Plugin"
+license-file = ["LICENSE.md", "0"]
+maintainer-scripts = "resources/debian/"
+depends = "fog05-agent (>= 0.3 ), fog05-agent (<< 0.4 ), $auto"
+section = "utils"
+priority = "optional"
+assets = [
+    # binary
+    ["target/release/linux-networking", "/usr/bin/fos-net-linux", "755"],
+    ["target/release/fos-net-linux-ns-manager", "/usr/bin/fos-net-linux-ns-manager", "755"],
+    # assets
+    ["etc/*", "/etc/fos/linux-network", "644"],
+    ["etc/*", "/var/fos/linux-network", "644"],
+    ["resources/fos-net-linux.service", "/lib/systemd/system/fos-net-linux.service", "644"],
+]
+[package.metadata.deb.systemd-units]
+unit-scripts = "resources/"
+unit-name = "fos-net-linux.service"

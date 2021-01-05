@@ -19,8 +19,8 @@
 [![Gitter](https://badges.gitter.im/atolab/fog05.svg)](https://gitter.im/atolab/fog05?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge)
 [![License](https://img.shields.io/badge/License-EPL%202.0-blue)](https://choosealicense.com/licenses/epl-2.0/)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
-[![Build Status](https://travis-ci.com/eclipse-fog05/plugin-net-linuxbridge.svg?branch=master)](https://travis-ci.com/eclipse-fog05/plugin-net-linuxbridge)
-
+[![Build Status](https://travis-ci.com/eclipse-fog05/fog05-networking-linux.svg?branch=master)](https://travis-ci.com/eclipse-fog05/fog05-networking-linux)
+[![GitHub CI](https://github.com/eclipse-fog05/fog05-networking-linux/workflows/Rust/badge.svg?branch=rust-master)](https://github.com/eclipse-fog05/fog05-networking-linux/actions?query=workflow%3ARust)
 
 Linux Bridge Network Manager Plugin
 
@@ -39,14 +39,3 @@ todo:
 - create virtual interface
 - remove interface from network
 
-
----
-package dependencies:
-
-- bridge-utils
----
-
-
-config dependencies:
-- update the nodeid (result of `cat /etc/machine-id` ) in linuxbridge_plugin.json->configuration->nodeid, and in case the yaks server is not in the same machine, also linuxbridge_plugin.json->configuration->nodeid with the correct ip:port of the yaks server )
-- user should be able to use sudo without password asking (`echo "username  ALL=(ALL) NOPASSWD: ALL"  >> /etc/sudoers`)
