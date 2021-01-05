@@ -28,8 +28,10 @@ use async_std::task;
 
 use log::{error, info, trace};
 
-use zrpc::ZServe;
-use zrpc_macros::zserver;
+use znrpc_macros::znserver;
+use zrpc::ZNServe;
+
+use zenoh::*;
 
 use fog05_sdk::agent::{AgentPluginInterfaceClient, OSClient};
 use fog05_sdk::fresult::{FError, FResult};
@@ -66,7 +68,7 @@ use crate::types::{
     LinuxNetworkState, NamespaceManagerClient, VNetDHCP, VNetNetns, VirtualNetworkInternals,
 };
 
-#[zserver]
+#[znserver]
 impl NetworkingPlugin for LinuxNetwork {
     /// Creates the default fosbr0 virtual network
     /// it's UUID is 00000000-0000-0000-0000-000000000000
@@ -108,7 +110,7 @@ impl NetworkingPlugin for LinuxNetwork {
         let default_mcast_addr = IPAddress::V4(std::net::Ipv4Addr::new(239, 15, 5, 0));
         let default_port: u16 = 3845;
 
-        let dafault_ext_if_name = self.get_overlay_iface()?;
+        let dafault_ext_if_name = self.get_overlay_iface().await?;
 
         let mut default_vnet = VirtualNetwork {
             uuid: default_net_uuid,
@@ -2089,7 +2091,7 @@ impl NetworkingPlugin for LinuxNetwork {
 
 impl LinuxNetwork {
     pub fn new(
-        z: Arc<zenoh::Zenoh>,
+        z: Arc<zenoh::net::Session>,
         connector: Arc<fog05_sdk::zconnector::ZConnector>,
         pid: u32,
         config: LinuxNetworkConfig,
@@ -2118,7 +2120,7 @@ impl LinuxNetwork {
         let hv_server = self
             .clone()
             .get_networking_plugin_server(self.z.clone(), None);
-        hv_server.connect().await?;
+        let (stopper, _h) = hv_server.connect().await?;
         hv_server.initialize().await?;
 
         let mut guard = self.state.write().await;
@@ -2155,7 +2157,7 @@ impl LinuxNetwork {
 
         hv_server.stop(shv).await?;
         hv_server.unregister().await?;
-        hv_server.disconnect().await?;
+        hv_server.disconnect(stopper).await?;
 
         info!("LinuxNetwork main loop exiting");
         Ok(())
@@ -2167,13 +2169,13 @@ impl LinuxNetwork {
         async_std::channel::Sender<()>,
         async_std::task::JoinHandle<FResult<()>>,
     ) {
-        let local_os = OSClient::find_local_servers(self.z.clone()).await.unwrap();
+        let local_os = OSClient::find_servers(self.z.clone()).await.unwrap();
         if local_os.is_empty() {
             error!("Unable to find a local OS interface");
             panic!("No OS Server");
         }
 
-        let local_agent = AgentPluginInterfaceClient::find_local_servers(self.z.clone())
+        let local_agent = AgentPluginInterfaceClient::find_servers(self.z.clone())
             .await
             .unwrap();
         if local_agent.is_empty() {

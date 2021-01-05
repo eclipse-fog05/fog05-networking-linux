@@ -59,8 +59,9 @@ async fn main() {
 
     let properties = format!("mode=client;peer={}", config.zlocator.clone());
     let zproperties = Properties::from(properties);
-    let zenoh = Arc::new(Zenoh::new(zproperties.into()).await.unwrap());
-    let zconnector = Arc::new(ZConnector::new(zenoh.clone(), None, None));
+    let z = Arc::new(Zenoh::new(zproperties.clone().into()).await.unwrap());
+    let zenoh = Arc::new(zenoh::net::open(zproperties.into()).await.unwrap());
+    let zconnector = Arc::new(ZConnector::new(z.clone(), None, None));
 
     let mut net = LinuxNetwork::new(zenoh.clone(), zconnector.clone(), my_pid, config).unwrap();
 

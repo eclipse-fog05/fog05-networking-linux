@@ -34,8 +34,8 @@ use fog05_sdk::fresult::{FError, FResult};
 use fog05_sdk::types::IPAddress;
 use fog05_sdk::zconnector::ZConnector;
 
-use zrpc::ZServe;
-use zrpc_macros::zserver;
+use znrpc_macros::znserver;
+use zrpc::ZNServe;
 
 use signal_hook_async_std::Signals;
 
@@ -76,7 +76,7 @@ struct NSManagerArgs {
 
 #[derive(Clone)]
 pub struct NSManager {
-    pub z: Arc<zenoh::Zenoh>,
+    pub z: Arc<zenoh::net::Session>,
     pub pid: u32,
     pub uuid: Uuid,
     pub rt: Arc<RwLock<tokio::runtime::Runtime>>,
@@ -176,7 +176,7 @@ fn main() {
 
                 let properties = format!("mode=client;peer={}", args.locator.clone());
                 let zproperties = Properties::from(properties);
-                let zenoh = Arc::new(Zenoh::new(zproperties.into()).await.unwrap());
+                let zenoh = Arc::new(zenoh::net::open(zproperties.into()).await.unwrap());
 
                 let mut manager = match NSManager::new(zenoh, my_pid, args.id, rt) {
                     Ok(m) => m,
@@ -240,7 +240,7 @@ fn main() {
 
 impl NSManager {
     pub fn new(
-        z: Arc<zenoh::Zenoh>,
+        z: Arc<zenoh::net::Session>,
         pid: u32,
         uuid: Uuid,
         rt: tokio::runtime::Runtime,
@@ -259,7 +259,7 @@ impl NSManager {
             .clone()
             .get_namespace_manager_server(self.z.clone(), Some(self.uuid));
 
-        ns_manager_server.connect().await?;
+        let (stopper, _h) = ns_manager_server.connect().await?;
         ns_manager_server.initialize().await?;
         ns_manager_server.register().await?;
 
@@ -275,7 +275,7 @@ impl NSManager {
 
         ns_manager_server.stop(sender).await?;
         ns_manager_server.unregister().await?;
-        ns_manager_server.disconnect().await?;
+        ns_manager_server.disconnect(stopper).await?;
 
         log::info!("Network Namespace Manager main loop exiting");
         Ok(())
@@ -848,7 +848,7 @@ impl NSManager {
     }
 }
 
-#[zserver]
+#[znserver]
 impl NamespaceManager for NSManager {
     async fn set_virtual_interface_up(&self, iface: String) -> FResult<()> {
         self.set_iface_up(iface).await

@@ -30,8 +30,9 @@ use fog05_sdk::agent::{AgentPluginInterfaceClient, OSClient};
 use fog05_sdk::fresult::{FError, FResult};
 use fog05_sdk::types::IPAddress;
 
+use zenoh::*;
+use znrpc_macros::znservice;
 use zrpc::zrpcresult::{ZRPCError, ZRPCResult};
-use zrpc_macros::zservice;
 
 use uuid::Uuid;
 
@@ -57,7 +58,7 @@ pub struct LinuxNetworkState {
 
 #[derive(Clone)]
 pub struct LinuxNetwork {
-    pub z: Arc<zenoh::Zenoh>,
+    pub z: Arc<zenoh::net::Session>,
     pub connector: Arc<fog05_sdk::zconnector::ZConnector>,
     pub pid: u32,
     pub agent: Option<AgentPluginInterfaceClient>,
@@ -113,7 +114,7 @@ pub fn deserialize_plugin_config(raw_data: &[u8]) -> FResult<LinuxNetworkConfig>
     .map_err(|e| FError::NetworkingError(format!("{}", e)))?)
 }
 
-#[zservice(timeout_s = 60, prefix = "/fos/local")]
+#[znservice(timeout_s = 60, prefix = "/fos/local")]
 pub trait NamespaceManager {
     async fn set_virtual_interface_up(&self, iface: String) -> FResult<()>;
     async fn set_virtual_interface_down(&self, iface: String) -> FResult<()>;
