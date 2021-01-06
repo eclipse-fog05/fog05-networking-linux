@@ -13,4 +13,4 @@ script:
   - cargo fmt -- --check
   - cargo build --release --all-targets --verbose
   - cargo deb --no-build --verbose
-  - dpkg -I .target/debian/fog05-networking-linux_0.3.0~alpha1_amd64.deb
+  - dpkg -I ./target/debian/fog05-networking-linux_0.3.0~alpha1_amd64.deb
