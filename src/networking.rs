@@ -2617,7 +2617,7 @@ impl LinuxNetwork {
                 handle
                     .link()
                     .set(link.header.index)
-                    .master(0u32)
+                    .nomaster()
                     .execute()
                     .await
                     .map_err(|e| FError::NetworkingError(format!("{}", e)))
