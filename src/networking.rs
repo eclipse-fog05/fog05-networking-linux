@@ -357,7 +357,7 @@ impl NetworkingPlugin for LinuxNetwork {
                     ipnetwork::Ipv4Network::new(std::net::Ipv4Addr::new(10, 240, 0, 0), 16)
                         .map_err(|e| FError::NetworkingError(format!("{}", e)))?,
                 ),
-                "eno0",
+                &self.get_overlay_face_from_config().await?.if_name,
             )
             .await?;
 

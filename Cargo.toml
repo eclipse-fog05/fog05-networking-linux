@@ -72,7 +72,7 @@ copyright = "2020, ADLINK Technology Inc"
 extended-description = "Eclipse fog05 Linux Networking Plugin"
 license-file = ["LICENSE.md", "0"]
 maintainer-scripts = "resources/debian/"
-depends = "fog05-agent (>= 0.3 ), fog05-agent (<< 0.4 ), $auto"
+depends = "fog05-agent (>= 0.3 ), fog05-agent (<< 0.4 ), dnsmasq-base (>= 0.0 ), nftables  (>= 0.0 ), libnftnl-dev  (>= 0.0 ), libnfnetlink-dev (>= 0.0 ), libmnl-dev  (>= 0.0 ), $auto"
 section = "utils"
 priority = "optional"
 assets = [

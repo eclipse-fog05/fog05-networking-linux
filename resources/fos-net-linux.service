@@ -2,6 +2,7 @@
 Description = Eclipse fog05 LinuxBridge Plugin
 
 [Service]
+Environment=RUST_LOG="linux_networking,fog05_networking_linux=trace"
 Type=simple
 PIDFile=/var/fos/fos-net-linux.pid
 ExecStart = /usr/bin/fos-net-linux -c /etc/fos/linux-network/config.yaml
