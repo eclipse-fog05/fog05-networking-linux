@@ -21,6 +21,7 @@ set -e
 case "$1" in
     configure)
         chown fos:fos -R /var/fos
+        deb-systemd-invoke restart procps.service
         systemctl daemon-reload
     ;;
 

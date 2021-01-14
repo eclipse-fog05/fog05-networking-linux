@@ -80,8 +80,9 @@ assets = [
     ["target/release/linux-networking", "/usr/bin/fos-net-linux", "755"],
     ["target/release/fos-net-linux-ns-manager", "/usr/bin/fos-net-linux-ns-manager", "755"],
     # assets
-    ["etc/*", "/etc/fos/linux-network", "644"],
-    ["etc/*", "/var/fos/linux-network", "644"],
+    ["etc/config.yaml", "/etc/fos/linux-network/config.yaml", "644"],
+    ["etc/dnsmasq.conf", "/var/fos/linux-network/dnsmasq.conf", "644"],
+    ["etc/99-fog05-net-linux.conf", "/etc/sysctl.d/99-fog05-net-linux.conf", "644"],
     ["resources/fos-net-linux.service", "/lib/systemd/system/fos-net-linux.service", "644"],
 ]
 conf-files = ["/etc/fos/linux-network/config.yaml"]
