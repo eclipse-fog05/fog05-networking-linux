@@ -1,7 +1,7 @@
 ---
     pid_file : /tmp/fos-linux.pid
-    zlocator : tcp/127.0.0.1:7447
-    zfilelocator: unixsock-stream//tmp/zenoh.sock
+    zlocator : tcp/127.0.0.1:61189
+    zfilelocator: unixsock-stream//tmp/fos-zenoh.sock
     path : /etc/fos/linux-network
     run_path : /var/fos/linux-network
     monitoring_interveal: 10
