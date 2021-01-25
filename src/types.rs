@@ -95,10 +95,10 @@ pub fn serialize_network_internals(data: &VirtualNetworkInternals) -> FResult<Ve
 }
 
 pub fn deserialize_network_internals(raw_data: &[u8]) -> FResult<VirtualNetworkInternals> {
-    Ok(serde_json::from_str::<VirtualNetworkInternals>(
+    serde_json::from_str::<VirtualNetworkInternals>(
         std::str::from_utf8(raw_data).map_err(|e| FError::NetworkingError(format!("{}", e)))?,
     )
-    .map_err(|e| FError::NetworkingError(format!("{}", e)))?)
+    .map_err(|e| FError::NetworkingError(format!("{}", e)))
 }
 
 pub fn serialize_plugin_config(data: &LinuxNetworkConfig) -> FResult<Vec<u8>> {
@@ -108,10 +108,10 @@ pub fn serialize_plugin_config(data: &LinuxNetworkConfig) -> FResult<Vec<u8>> {
 }
 
 pub fn deserialize_plugin_config(raw_data: &[u8]) -> FResult<LinuxNetworkConfig> {
-    Ok(serde_yaml::from_str::<LinuxNetworkConfig>(
+    serde_yaml::from_str::<LinuxNetworkConfig>(
         std::str::from_utf8(raw_data).map_err(|e| FError::NetworkingError(format!("{}", e)))?,
     )
-    .map_err(|e| FError::NetworkingError(format!("{}", e)))?)
+    .map_err(|e| FError::NetworkingError(format!("{}", e)))
 }
 
 #[znservice(timeout_s = 60, prefix = "/fos/local")]

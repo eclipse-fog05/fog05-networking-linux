@@ -407,18 +407,278 @@ impl NetworkingPlugin for LinuxNetwork {
         Ok(default_vnet)
     }
 
+    /// Creates the given virtual network in the current node.
+    /// This function is called by the Agent prior to instantiate any FDU
+    /// that requires this virtual network.
+    /// Network creation means:
+    /// 1 - Creation of a virtual bridge representing the network
+    /// 2 - Creation of the overlay/vlan face needed for the network
+    /// 3 - Creation on DHCP configuration (if any)
+    /// 4 - Configuration of netfilter for routing (NAT)
+    /// 5 - Creation of the associated network namespace
+    /// 6 - Creation of a bridge inside the associated network namespace
+    /// 7 - Creation and linking of a veth pair between internal bridge and external bridge
+    /// 8 - Link of the overlay/vlan face to the external bridge
+    ///
+    /// Eg. For a virtual network interfaces will be configured as follow
+    ///
+    ///
+    ///  +--------------------------------------+
+    ///  |   Default Node network namespace     |
+    ///  |                                      |
+    ///  | +---------------------------+        |
+    ///  | |  Virtual Network Bridge   |        |
+    ///  | |  +----------------+       | +---------------+
+    ///  | |  | overlay iface  <---------> eth0 |        |
+    ///  | |  +----------------+       | +---------------+
+    ///  | |  +----------------+       |        |
+    ///  | |  | veth-ext       |       |        |
+    ///  | |  +--------^-------+       |        |
+    ///  | +-----------|---------------+        |
+    ///  |             |                        |
+    ///  +-------------|------------------------+
+    ///                |
+    ///                |
+    ///                |
+    ///  +-------------|------------------------+
+    ///  |  +----------|---------------------+  |
+    ///  |  |  +-------v------+ +-----------+|  |
+    ///  |  |  |  veth-int    | | fdu-ifacen||  |
+    ///  |  |  +--------------+ +-----------+|  |
+    ///  |  |  +--------------+              |  |
+    ///  |  |  | fdu-iface1   |              |  |
+    ///  |  |  +--------------+              |  |
+    ///  |  |                                |  |
+    ///  |  |                                |  |
+    ///  |  |     Internal bridge            |  |
+    ///  |  +--------------------------------+  |
+    ///  |  Virtual Network network namespace   |
+    ///  +--------------------------------------+
+    ///
     async fn create_virtual_network(&self, vnet_uuid: Uuid) -> FResult<VirtualNetwork> {
-        // this function is never called directly from API/Orchestrator
-
         match self.connector.global.get_virtual_network(vnet_uuid).await {
             Ok(mut vnet) => match &vnet.link_kind {
                 LinkKind::L2(link_kind_info) => {
+                    //Multicast-based VxLAN
                     let node_uuid = self.agent.as_ref().unwrap().get_node_uuid().await??;
+
+                    // Generating Names
+
+                    let br_uuid = Uuid::new_v4();
+                    let br_name = self.generate_random_interface_name();
+
+                    let vxl_uuid = Uuid::new_v4();
+                    let vxl_name = self.generate_random_interface_name();
+
+                    let internal_br_uuid = Uuid::new_v4();
+                    let internal_br_name = self.generate_random_interface_name();
+
+                    let internal_veth_uuid = Uuid::new_v4();
+                    let internal_veth_name = self.generate_random_interface_name();
+
+                    let external_veth_uuid = Uuid::new_v4();
+                    let external_veth_name = self.generate_random_interface_name();
+
                     let mut associated_ns = NetworkNamespace {
                         uuid: vnet.uuid,
                         ns_name: self.generate_random_netns_name(),
-                        interfaces: vec![],
+                        interfaces: vec![
+                            external_veth_uuid,
+                            internal_veth_uuid,
+                            internal_br_uuid,
+                            vxl_uuid,
+                            br_uuid,
+                        ],
                     };
+
+                    // Generating Structs
+
+                    let v_bridge = VirtualInterface {
+                        uuid: br_uuid,
+                        if_name: br_name.clone(),
+                        net_ns: None,
+                        parent: None,
+                        kind: VirtualInterfaceKind::BRIDGE(BridgeKind {
+                            childs: vec![external_veth_uuid, vxl_uuid],
+                        }),
+                        addresses: Vec::new(),
+                        phy_address: MACAddress::new(0, 0, 0, 0, 0, 0),
+                    };
+
+                    let v_internal_bridge = VirtualInterface {
+                        uuid: internal_br_uuid,
+                        if_name: internal_br_name.clone(),
+                        net_ns: None,
+                        parent: None,
+                        kind: VirtualInterfaceKind::BRIDGE(BridgeKind {
+                            childs: vec![internal_veth_uuid],
+                        }),
+                        addresses: Vec::new(),
+                        phy_address: MACAddress::new(0, 0, 0, 0, 0, 0),
+                    };
+
+                    let vxl_iface = VirtualInterface {
+                        uuid: vxl_uuid,
+                        if_name: vxl_name.clone(),
+                        net_ns: None,
+                        parent: Some(br_uuid),
+                        kind: VirtualInterfaceKind::VXLAN(VXLANKind {
+                            vni: link_kind_info.vni,
+                            port: link_kind_info.port,
+                            mcast_addr: link_kind_info.mcast_addr,
+                            dev: Interface {
+                                if_name: self.get_overlay_iface().await?,
+                                kind: InterfaceKind::ETHERNET,
+                                addresses: Vec::new(),
+                                phy_address: None,
+                            },
+                        }),
+                        addresses: Vec::new(),
+                        phy_address: MACAddress::new(0, 0, 0, 0, 0, 0),
+                    };
+
+                    let v_veth_i = VirtualInterface {
+                        uuid: internal_veth_uuid,
+                        if_name: internal_veth_name.clone(),
+                        net_ns: Some(associated_ns.uuid),
+                        parent: Some(internal_br_uuid),
+                        kind: VirtualInterfaceKind::VETH(VETHKind {
+                            pair: external_veth_uuid,
+                            internal: true,
+                        }),
+                        addresses: Vec::new(),
+                        phy_address: MACAddress::new(0, 0, 0, 0, 0, 0),
+                    };
+
+                    let v_veth_e = VirtualInterface {
+                        uuid: external_veth_uuid,
+                        if_name: external_veth_name.clone(),
+                        net_ns: None,
+                        parent: Some(br_uuid),
+                        kind: VirtualInterfaceKind::VETH(VETHKind {
+                            pair: internal_veth_uuid,
+                            internal: false,
+                        }),
+                        addresses: Vec::new(),
+                        phy_address: MACAddress::new(0, 0, 0, 0, 0, 0),
+                    };
+
+                    // Creating Virtual network bridge
+
+                    self.create_bridge(br_name.clone()).await?;
+                    self.connector
+                        .global
+                        .add_node_interface(node_uuid, &v_bridge)
+                        .await?;
+
+                    self.set_iface_up(br_name.clone()).await?;
+
+                    // Creating VXLAN Interface
+
+                    self.create_mcast_vxlan(
+                        vxl_name.clone(),
+                        self.get_overlay_iface().await?,
+                        link_kind_info.vni,
+                        link_kind_info.mcast_addr,
+                        link_kind_info.port,
+                    )
+                    .await?;
+                    self.connector
+                        .global
+                        .add_node_interface(node_uuid, &vxl_iface)
+                        .await?;
+
+                    self.set_iface_master(vxl_name.clone(), br_name.clone())
+                        .await?;
+                    self.set_iface_up(vxl_name).await?;
+
+                    // Creating netns and spawing the namespace manager
+                    self.add_netns(associated_ns.ns_name.clone()).await?;
+                    let mut guard = self.state.write().await;
+                    let child = Command::new("fos-net-linux-ns-manager")
+                        .arg("--netns")
+                        .arg(&associated_ns.ns_name.clone())
+                        .arg("--id")
+                        .arg(format!("{}", associated_ns.uuid))
+                        .arg("--locator")
+                        .arg(self.config.zfilelocator.clone())
+                        .spawn()
+                        .map_err(|e| FError::NetworkingError(format!("{}", e)))?;
+                    let ns_manager_client =
+                        NamespaceManagerClient::new(self.z.clone(), associated_ns.uuid);
+                    guard
+                        .ns_managers
+                        .insert(associated_ns.uuid, (child.id(), ns_manager_client));
+                    drop(guard);
+
+                    self.connector
+                        .global
+                        .add_node_network_namespace(node_uuid, &associated_ns)
+                        .await?;
+
+                    // Creating veth pair
+                    self.create_veth(external_veth_name.clone(), internal_veth_name.clone())
+                        .await?;
+
+                    self.connector
+                        .global
+                        .add_node_interface(node_uuid, &v_veth_e)
+                        .await?;
+
+                    self.connector
+                        .global
+                        .add_node_interface(node_uuid, &v_veth_i)
+                        .await?;
+
+                    self.set_iface_master(external_veth_name.clone(), br_name.clone())
+                        .await?;
+                    self.set_iface_up(external_veth_name).await?;
+
+                    self.set_iface_ns(
+                        internal_veth_name.clone(),
+                        associated_ns.ns_name.clone().clone(),
+                    )
+                    .await?;
+
+                    // create internal bridge
+
+                    let mut guard = self.state.read().await;
+                    let (_, ns_manager) = guard
+                        .ns_managers
+                        .get(&associated_ns.uuid)
+                        .ok_or_else(|| FError::NetworkingError("Manager not found".to_string()))?;
+
+                    ns_manager
+                        .add_virtual_interface_bridge(internal_br_name.clone())
+                        .await??;
+
+                    self.connector
+                        .global
+                        .add_node_interface(node_uuid, &v_internal_bridge)
+                        .await?;
+
+                    ns_manager
+                        .set_virtual_interface_master(
+                            internal_veth_name.clone(),
+                            internal_br_name.clone(),
+                        )
+                        .await?;
+                    drop(guard);
+
+                    // NAT configuration, skip it for the time being...
+                    // let nat_table = self
+                    //     .configure_nat(
+                    //         IpNetwork::V4(
+                    //             ipnetwork::Ipv4Network::new(
+                    //                 std::net::Ipv4Addr::new(10, 240, 0, 0),
+                    //                 16,
+                    //             )
+                    //             .map_err(|e| FError::NetworkingError(format!("{}", e)))?,
+                    //         ),
+                    //         &self.get_overlay_face_from_config().await?.if_name,
+                    //     )
+                    //     .await?;
+
                     let dhcp_internal = match &vnet.ip_configuration {
                         Some(conf) => None,
                         None => None,
@@ -482,6 +742,13 @@ impl NetworkingPlugin for LinuxNetwork {
                     return Err(FError::NetworkingError(
                         "Cannot remove virtual network that has attached connection points".into(),
                     ));
+                }
+
+                if let Some(ref pl_net_info) = vnet.plugin_internals {
+                    let net_info = deserialize_network_internals(pl_net_info)?;
+                    if let Some(ns_info) = net_info.associated_netns {
+                        self.delete_network_namespace(ns_info.ns_uuid).await?;
+                    }
                 }
 
                 self.connector
