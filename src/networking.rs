@@ -508,7 +508,7 @@ impl NetworkingPlugin for LinuxNetwork {
                     let v_internal_bridge = VirtualInterface {
                         uuid: internal_br_uuid,
                         if_name: internal_br_name.clone(),
-                        net_ns: None,
+                        net_ns: Some(associated_ns.uuid),
                         parent: None,
                         kind: VirtualInterfaceKind::BRIDGE(BridgeKind {
                             childs: vec![internal_veth_uuid],
@@ -571,6 +571,8 @@ impl NetworkingPlugin for LinuxNetwork {
                         .add_node_interface(node_uuid, &v_bridge)
                         .await?;
 
+                    vnet.interfaces.push(br_uuid);
+
                     self.set_iface_up(br_name.clone()).await?;
 
                     // Creating VXLAN Interface
@@ -587,6 +589,8 @@ impl NetworkingPlugin for LinuxNetwork {
                         .global
                         .add_node_interface(node_uuid, &vxl_iface)
                         .await?;
+
+                    vnet.interfaces.push(vxl_uuid);
 
                     self.set_iface_master(vxl_name.clone(), br_name.clone())
                         .await?;
@@ -625,10 +629,14 @@ impl NetworkingPlugin for LinuxNetwork {
                         .add_node_interface(node_uuid, &v_veth_e)
                         .await?;
 
+                    vnet.interfaces.push(internal_veth_uuid);
+
                     self.connector
                         .global
                         .add_node_interface(node_uuid, &v_veth_i)
                         .await?;
+
+                    vnet.interfaces.push(external_veth_uuid);
 
                     self.set_iface_master(external_veth_name.clone(), br_name.clone())
                         .await?;
@@ -639,6 +647,9 @@ impl NetworkingPlugin for LinuxNetwork {
                         associated_ns.ns_name.clone().clone(),
                     )
                     .await?;
+
+                    // This is to be sure that the Namespace manager is up.
+                    async_std::task::sleep(std::time::Duration::from_secs(2)).await;
 
                     // create internal bridge
 
@@ -651,6 +662,8 @@ impl NetworkingPlugin for LinuxNetwork {
                     ns_manager
                         .add_virtual_interface_bridge(internal_br_name.clone())
                         .await??;
+
+                    vnet.interfaces.push(internal_br_uuid);
 
                     self.connector
                         .global
@@ -733,11 +746,18 @@ impl NetworkingPlugin for LinuxNetwork {
         {
             Err(_) => Err(FError::NotFound),
             Ok(vnet) => {
-                if !vnet.interfaces.is_empty() {
-                    return Err(FError::NetworkingError(
-                        "Cannot remove virtual network that has attached interfaces".into(),
-                    ));
+                // if !vnet.interfaces.is_empty() {
+                //     return Err(FError::NetworkingError(
+                //         "Cannot remove virtual network that has attached interfaces".into(),
+                //     ));
+                // }
+                for i in &vnet.interfaces {
+                    log::info!(
+                        "Deleting virtual interface: {:?}",
+                        self.delete_virtual_interface(*i).await?
+                    );
                 }
+
                 if !vnet.connection_points.is_empty() {
                     return Err(FError::NetworkingError(
                         "Cannot remove virtual network that has attached connection points".into(),
@@ -1054,6 +1074,7 @@ impl NetworkingPlugin for LinuxNetwork {
     }
 
     async fn delete_virtual_interface(&self, intf_uuid: Uuid) -> FResult<VirtualInterface> {
+        log::trace!("delete_virtual_interface({})", intf_uuid);
         let node_uuid = self.agent.as_ref().unwrap().get_node_uuid().await??;
         match self
             .connector
@@ -1061,51 +1082,98 @@ impl NetworkingPlugin for LinuxNetwork {
             .get_node_interface(node_uuid, intf_uuid)
             .await
         {
-            Err(_) => Err(FError::NotFound),
-            Ok(intf) => match intf.net_ns {
-                Some(ns_uuid) => {
-                    let netns = self
-                        .connector
-                        .global
-                        .get_node_network_namespace(node_uuid, ns_uuid)
-                        .await?;
-                    let guard = self.state.read().await;
-                    let (_, ns_manager) = guard
-                        .ns_managers
-                        .get(&ns_uuid)
-                        .ok_or_else(|| FError::NetworkingError("Manager not found".to_string()))?;
-                    let addresses = ns_manager
-                        .del_virtual_interface(intf.if_name.clone())
-                        .await??;
-                    drop(guard);
-                    self.connector
-                        .global
-                        .remove_node_interface(node_uuid, intf_uuid)
-                        .await?;
-                    Ok(intf)
-                }
-                None => {
-                    if let VirtualInterfaceKind::VETH(ref info) = intf.kind {
-                        let pair = self
+            Err(e) => {
+                log::error!("Unable to find interface {}, error: {}", intf_uuid, e);
+                Err(FError::NotFound)
+            }
+            Ok(intf) => {
+                log::error!("Delete Interface: {:?}", intf);
+                match intf.net_ns {
+                    Some(ns_uuid) => {
+                        let res = self
                             .connector
                             .global
-                            .get_node_interface(node_uuid, info.pair)
-                            .await?;
-                        self.del_iface(pair.if_name.clone()).await?;
+                            .get_node_network_namespace(node_uuid, ns_uuid)
+                            .await;
+                        log::trace!(
+                            "get_node_network_namespace({},{}) = {:?}",
+                            node_uuid,
+                            ns_uuid,
+                            res
+                        );
+
+                        let netns = res?;
+                        let guard = self.state.read().await;
+                        let (_, ns_manager) = guard.ns_managers.get(&ns_uuid).ok_or_else(|| {
+                            FError::NetworkingError("Manager not found".to_string())
+                        })?;
+                        let res = ns_manager.del_virtual_interface(intf.if_name.clone()).await;
+                        log::info!(
+                            "Result of del_virtual_interface({}) -> {:?}",
+                            intf.if_name.clone(),
+                            res
+                        );
+                        if let Err(e) = res? {
+                            log::warn!(
+                                "Got error {} from namespace manager when removing {}",
+                                e,
+                                intf.if_name
+                            );
+                            if let VirtualInterfaceKind::VETH(VETHKind { pair, internal }) =
+                                intf.kind
+                            {
+                                if let Err(e) = self
+                                    .connector
+                                    .global
+                                    .get_node_interface(node_uuid, pair)
+                                    .await
+                                {
+                                    log::warn!("Other end of veth pair was already removed: {}", e);
+                                    return Ok(intf);
+                                }
+                                return Err(FError::NetworkingError(
+                                    "Veth peer not removed but interface not found in namespace"
+                                        .to_string(),
+                                ));
+                            }
+                            return Err(e);
+                        }
+                        drop(guard);
                         self.connector
                             .global
-                            .remove_node_interface(node_uuid, info.pair)
+                            .remove_node_interface(node_uuid, intf_uuid)
                             .await?;
+                        Ok(intf)
                     }
-
-                    self.del_iface(intf.if_name.clone()).await?;
-                    self.connector
-                        .global
-                        .remove_node_interface(node_uuid, intf_uuid)
-                        .await?;
-                    Ok(intf)
+                    None => {
+                        if let VirtualInterfaceKind::VETH(ref info) = intf.kind {
+                            if let Ok(pair) = self
+                                .connector
+                                .global
+                                .get_node_interface(node_uuid, info.pair)
+                                .await
+                            {
+                                self.del_iface(intf.if_name.clone()).await;
+                                self.del_iface(pair.if_name.clone()).await;
+                                self.connector
+                                    .global
+                                    .remove_node_interface(node_uuid, info.pair)
+                                    .await?;
+                            } else {
+                                log::trace!("Peer was alredy removed...");
+                                self.del_iface(intf.if_name.clone()).await;
+                            }
+                        } else {
+                            self.del_iface(intf.if_name.clone()).await?;
+                        }
+                        self.connector
+                            .global
+                            .remove_node_interface(node_uuid, intf_uuid)
+                            .await?;
+                        Ok(intf)
+                    }
                 }
-            },
+            }
         }
     }
 
