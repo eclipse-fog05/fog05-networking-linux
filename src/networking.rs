@@ -454,19 +454,28 @@ impl NetworkingPlugin for LinuxNetwork {
     async fn create_virtual_network(&self, vnet_uuid: Uuid) -> FResult<VirtualNetwork> {
         let node_uuid = self.agent.as_ref().unwrap().get_node_uuid().await??;
         match self.connector.global.get_virtual_network(vnet_uuid).await {
-            Ok(mut vnet) => match vnet.clone().link_kind {
-                LinkKind::L2(link_kind_info) => {
-                    //Multicast-based VxLAN
-                    let vnet = self.mcast_vxlan_create(vnet, link_kind_info).await?;
-                    self.connector
-                        .global
-                        .add_node_virutal_network(node_uuid, &vnet)
-                        .await?;
-                    Ok(vnet)
+            Ok(mut vnet) => {
+                if let Ok(net) = self
+                    .connector
+                    .global
+                    .get_node_virtual_network(node_uuid, vnet_uuid).await
+                {
+                    return Ok(net);
                 }
-                // Unimplemented for other virtual networks kinds
-                _ => Err(FError::Unimplemented),
-            },
+                match vnet.clone().link_kind {
+                    LinkKind::L2(link_kind_info) => {
+                        //Multicast-based VxLAN
+                        let vnet = self.mcast_vxlan_create(vnet, link_kind_info).await?;
+                        self.connector
+                            .global
+                            .add_node_virutal_network(node_uuid, &vnet)
+                            .await?;
+                        Ok(vnet)
+                    }
+                    // Unimplemented for other virtual networks kinds
+                    _ => Err(FError::Unimplemented),
+                }
+            }
             Err(FError::NotFound) => {
                 // a virtual network with this UUID does not exists
                 Err(FError::NotFound)
