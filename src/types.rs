@@ -38,6 +38,8 @@ use uuid::Uuid;
 
 use ipnetwork::IpNetwork;
 
+pub type LinuxNetworkStateGuard<'a> = async_std::sync::RwLockReadGuard<'a, LinuxNetworkState>;
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct LinuxNetworkConfig {
     pub pid_file: Box<std::path::Path>,
