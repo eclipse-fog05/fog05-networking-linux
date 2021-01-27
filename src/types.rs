@@ -55,6 +55,7 @@ pub struct LinuxNetworkConfig {
 pub struct LinuxNetworkState {
     pub uuid: Option<Uuid>,
     pub tokio_rt: tokio::runtime::Runtime,
+    pub nl_handler: rtnetlink::Handle,
     pub ns_managers: HashMap<Uuid, (u32, NamespaceManagerClient)>,
 }
 

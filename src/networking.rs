@@ -19,7 +19,7 @@ use std::convert::From;
 use std::error::Error;
 use std::ffi::{self, CString};
 use std::os::unix::io::IntoRawFd;
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::time::Duration;
 
 use async_std::prelude::*;
@@ -51,8 +51,8 @@ use rand::distributions::Alphanumeric;
 use rand::{thread_rng, Rng};
 
 use netlink_packet_route::rtnl::address::nlas::Nla;
-use rtnetlink::new_connection;
 use rtnetlink::NetworkNamespace as NetlinkNetworkNamespace;
+use rtnetlink::{new_connection, Handle};
 
 use nix::sys::signal::{kill, Signal};
 use nix::unistd::Pid;
@@ -262,12 +262,7 @@ impl NetworkingPlugin for LinuxNetwork {
                 .unwrap()
                 .store_file(config.into_bytes(), conf_file_path.clone())
                 .await??;
-            let child = Command::new("dnsmasq")
-                .arg("-C")
-                .arg(conf_file_path.clone())
-                .stdin(Stdio::null())
-                .spawn()
-                .map_err(|e| FError::NetworkingError(format!("{}", e)))?;
+            let child = self.spawn_dnsmasq(conf_file_path.clone()).await?;
             log::debug!("DHCP Process running PID: {}", child.id());
             Some(VNetDHCP {
                 leases_file: lease_file_path,
@@ -974,7 +969,7 @@ impl NetworkingPlugin for LinuxNetwork {
                         .get_node_network_namespace(node_uuid, ns_uuid)
                         .await?;
                     let ns_manager = self.get_ns_manager(&ns_uuid).await?;
-                    let addresses = ns_manager
+                    ns_manager
                         .del_virtual_interface(i.if_name.clone())
                         .await??;
                     self.connector
@@ -1009,6 +1004,14 @@ impl NetworkingPlugin for LinuxNetwork {
         self.add_netns(ns_name.clone()).await?;
 
         self.spawn_ns_manager(ns_name.clone(), netns.uuid).await?;
+        let ns_manager = self.get_ns_manager(&netns.uuid).await?;
+
+        while !ns_manager.verify_server().await? {}
+
+        ns_manager
+            .set_virtual_interface_up("lo".to_string())
+            .await??;
+
         self.connector
             .global
             .add_node_network_namespace(node_uuid, &netns)
@@ -1222,7 +1225,7 @@ impl NetworkingPlugin for LinuxNetwork {
                         .get_node_network_namespace(node_uuid, ns_uuid)
                         .await?;
                     let ns_manager = self.get_ns_manager(&ns_uuid).await?;
-                    let addresses = ns_manager
+                    ns_manager
                         .del_virtual_interface(i.if_name.clone())
                         .await??;
                     self.connector
@@ -1433,7 +1436,7 @@ impl NetworkingPlugin for LinuxNetwork {
                         .get_node_network_namespace(node_uuid, ns_uuid)
                         .await?;
                     let ns_manager = self.get_ns_manager(&ns_uuid).await?;
-                    let addresses = ns_manager
+                    ns_manager
                         .set_virtual_interface_master(iface.if_name.clone(), bridge.if_name.clone())
                         .await??;
 
@@ -1695,7 +1698,8 @@ impl NetworkingPlugin for LinuxNetwork {
                     phy_address: MACAddress::new(0, 0, 0, 0, 0, 0),
                 };
                 let ns_manager = self.get_ns_manager(&ns_uuid).await?;
-                let addresses = ns_manager
+
+                ns_manager
                     .add_virtual_interface_veth(
                         v_iface_internal.if_name.clone(),
                         external_face_name.clone(),
@@ -1895,7 +1899,7 @@ impl NetworkingPlugin for LinuxNetwork {
             Some(nid) => {
                 if nid == netns.uuid {
                     let ns_manager = self.get_ns_manager(&ns_uuid).await?;
-                    let addresses = ns_manager
+                    ns_manager
                         .del_virtual_interface(iface.if_name.clone())
                         .await??;
 
@@ -2061,7 +2065,7 @@ impl NetworkingPlugin for LinuxNetwork {
                     .get_node_network_namespace(node_uuid, ns_uuid)
                     .await?;
                 let ns_manager = self.get_ns_manager(&ns_uuid).await?;
-                let addresses = ns_manager
+                ns_manager
                     .set_virtual_interface_mac(iface.if_name.clone(), vec_addr)
                     .await??;
                 iface.phy_address = address;
@@ -2085,15 +2089,27 @@ impl NetworkingPlugin for LinuxNetwork {
 }
 
 impl LinuxNetwork {
-    pub fn new(
+    pub async fn new(
         z: Arc<zenoh::net::Session>,
         connector: Arc<fog05_sdk::zconnector::ZConnector>,
         pid: u32,
         config: LinuxNetworkConfig,
     ) -> FResult<Self> {
+        // this will be removed once netlink merges the async-std support
+        let tokio_rt = tokio::runtime::Runtime::new()?;
+        let handle = tokio_rt
+            .spawn_blocking(|| {
+                let (connection, handle, _) = new_connection().unwrap();
+                tokio::spawn(connection);
+                handle
+            })
+            .await
+            .map_err(|e| FError::NetworkingError(format!("{}", e)))?;
+
         let state = LinuxNetworkState {
             uuid: None,
-            tokio_rt: tokio::runtime::Runtime::new()?,
+            tokio_rt,
+            nl_handler: handle,
             ns_managers: HashMap::new(),
         };
 
@@ -2511,14 +2527,22 @@ impl LinuxNetwork {
         )
         .await?;
 
-        // This is to be sure that the Namespace manager is up.
-        async_std::task::sleep(std::time::Duration::from_secs(2)).await;
-
         // create internal bridge
         let ns_manager = self.get_ns_manager(&associated_ns.uuid).await?;
 
+        // This is used to wait that the namespace manager is ready to serve
+        while !ns_manager.verify_server().await? {}
+
+        ns_manager
+            .set_virtual_interface_up("lo".to_string())
+            .await??;
+
         ns_manager
             .add_virtual_interface_bridge(internal_br_name.clone())
+            .await??;
+
+        ns_manager
+            .set_virtual_interface_up(internal_br_name.clone())
             .await??;
 
         vnet.interfaces.push(internal_br_uuid);
@@ -2530,7 +2554,11 @@ impl LinuxNetwork {
 
         ns_manager
             .set_virtual_interface_master(internal_veth_name.clone(), internal_br_name.clone())
-            .await?;
+            .await??;
+
+        ns_manager
+            .set_virtual_interface_up(internal_veth_name.clone())
+            .await??;
 
         // NAT configuration, skip it for the time being...
         // let nat_table = self
@@ -2625,11 +2653,7 @@ impl LinuxNetwork {
         let mut state = self.state.write().await;
         state
             .tokio_rt
-            .block_on(async {
-                let (connection, handle, _) = new_connection().unwrap();
-                tokio::spawn(connection);
-                NetlinkNetworkNamespace::add(ns_name).await
-            })
+            .block_on(async { NetlinkNetworkNamespace::add(ns_name).await })
             .map_err(|e| FError::NetworkingError(format!("{}", e)))
     }
 
@@ -2638,23 +2662,32 @@ impl LinuxNetwork {
         let mut state = self.state.write().await;
         state
             .tokio_rt
-            .block_on(async {
-                let (connection, handle, _) = new_connection().unwrap();
-                tokio::spawn(connection);
-                NetlinkNetworkNamespace::del(ns_name).await
-            })
+            .block_on(async { NetlinkNetworkNamespace::del(ns_name).await })
             .map_err(|e| FError::NetworkingError(format!("{}", e)))
     }
 
     async fn create_bridge(&self, br_name: String) -> FResult<()> {
         log::trace!("create_bridge {}", br_name);
+        // let mut state = self.state.write().await;
+        // state
+        //     .tokio_rt
+        //     .block_on(async {
+        //         let (connection, handle, _) = new_connection().unwrap();
+        //         tokio::spawn(connection);
+        //         handle.link().add().bridge(br_name).execute().await
+        //     })
+        //     .map_err(|e| FError::NetworkingError(format!("{}", e)))
         let mut state = self.state.write().await;
         state
             .tokio_rt
             .block_on(async {
-                let (connection, handle, _) = new_connection().unwrap();
-                tokio::spawn(connection);
-                handle.link().add().bridge(br_name).execute().await
+                state
+                    .nl_handler
+                    .link()
+                    .add()
+                    .bridge(br_name)
+                    .execute()
+                    .await
             })
             .map_err(|e| FError::NetworkingError(format!("{}", e)))
     }
@@ -2665,9 +2698,13 @@ impl LinuxNetwork {
         state
             .tokio_rt
             .block_on(async {
-                let (connection, handle, _) = new_connection().unwrap();
-                tokio::spawn(connection);
-                handle.link().add().veth(iface_i, iface_e).execute().await
+                state
+                    .nl_handler
+                    .link()
+                    .add()
+                    .veth(iface_i, iface_e)
+                    .execute()
+                    .await
             })
             .map_err(|e| FError::NetworkingError(format!("{}", e)))
     }
@@ -2678,15 +2715,14 @@ impl LinuxNetwork {
         state
             .tokio_rt
             .block_on(async {
-                let (connection, handle, _) = new_connection().unwrap();
-                tokio::spawn(connection);
-                let mut links = handle.link().get().set_name_filter(dev).execute();
+                let mut links = state.nl_handler.link().get().set_name_filter(dev).execute();
                 if let Some(link) = links
                     .try_next()
                     .await
                     .map_err(|e| FError::NetworkingError(format!("{}", e)))?
                 {
-                    handle
+                    state
+                        .nl_handler
                         .link()
                         .add()
                         .vlan(iface, link.header.index, tag)
@@ -2720,15 +2756,14 @@ impl LinuxNetwork {
         state
             .tokio_rt
             .block_on(async {
-                let (connection, handle, _) = new_connection().unwrap();
-                tokio::spawn(connection);
-                let mut links = handle.link().get().set_name_filter(dev).execute();
+                let mut links = state.nl_handler.link().get().set_name_filter(dev).execute();
                 if let Some(link) = links
                     .try_next()
                     .await
                     .map_err(|e| FError::NetworkingError(format!("{}", e)))?
                 {
-                    let vxlan = handle
+                    let vxlan = state
+                        .nl_handler
                         .link()
                         .add()
                         .vxlan(iface, vni)
@@ -2773,15 +2808,14 @@ impl LinuxNetwork {
         state
             .tokio_rt
             .block_on(async {
-                let (connection, handle, _) = new_connection().unwrap();
-                tokio::spawn(connection);
-                let mut links = handle.link().get().set_name_filter(dev).execute();
+                let mut links = state.nl_handler.link().get().set_name_filter(dev).execute();
                 if let Some(link) = links
                     .try_next()
                     .await
                     .map_err(|e| FError::NetworkingError(format!("{}", e)))?
                 {
-                    let vxlan = handle
+                    let vxlan = state
+                        .nl_handler
                         .link()
                         .add()
                         .vxlan(iface, vni)
@@ -2813,15 +2847,19 @@ impl LinuxNetwork {
         log::trace!("del_iface {}", iface);
         let mut state = self.state.write().await;
         state.tokio_rt.block_on(async {
-            let (connection, handle, _) = new_connection().unwrap();
-            tokio::spawn(connection);
-            let mut links = handle.link().get().set_name_filter(iface).execute();
+            let mut links = state
+                .nl_handler
+                .link()
+                .get()
+                .set_name_filter(iface)
+                .execute();
             if let Some(link) = links
                 .try_next()
                 .await
                 .map_err(|e| FError::NetworkingError(format!("{}", e)))?
             {
-                handle
+                state
+                    .nl_handler
                     .link()
                     .del(link.header.index)
                     .execute()
@@ -2837,21 +2875,30 @@ impl LinuxNetwork {
         log::trace!("set_iface_master {} {}", iface, master);
         let mut state = self.state.write().await;
         state.tokio_rt.block_on(async {
-            let (connection, handle, _) = new_connection().unwrap();
-            tokio::spawn(connection);
-            let mut links = handle.link().get().set_name_filter(iface).execute();
+            let mut links = state
+                .nl_handler
+                .link()
+                .get()
+                .set_name_filter(iface)
+                .execute();
             if let Some(link) = links
                 .try_next()
                 .await
                 .map_err(|e| FError::NetworkingError(format!("{}", e)))?
             {
-                let mut masters = handle.link().get().set_name_filter(master).execute();
+                let mut masters = state
+                    .nl_handler
+                    .link()
+                    .get()
+                    .set_name_filter(master)
+                    .execute();
                 if let Some(master) = masters
                     .try_next()
                     .await
                     .map_err(|e| FError::NetworkingError(format!("{}", e)))?
                 {
-                    handle
+                    state
+                        .nl_handler
                         .link()
                         .set(link.header.index)
                         .master(master.header.index)
@@ -2873,15 +2920,19 @@ impl LinuxNetwork {
         log::trace!("del_iface_master {}", iface);
         let mut state = self.state.write().await;
         state.tokio_rt.block_on(async {
-            let (connection, handle, _) = new_connection().unwrap();
-            tokio::spawn(connection);
-            let mut links = handle.link().get().set_name_filter(iface).execute();
+            let mut links = state
+                .nl_handler
+                .link()
+                .get()
+                .set_name_filter(iface)
+                .execute();
             if let Some(link) = links
                 .try_next()
                 .await
                 .map_err(|e| FError::NetworkingError(format!("{}", e)))?
             {
-                handle
+                state
+                    .nl_handler
                     .link()
                     .set(link.header.index)
                     .nomaster()
@@ -2899,15 +2950,19 @@ impl LinuxNetwork {
         log::trace!("add_iface_address {} {} {}", iface, addr, prefix);
         let mut state = self.state.write().await;
         state.tokio_rt.block_on(async {
-            let (connection, handle, _) = new_connection().unwrap();
-            tokio::spawn(connection);
-            let mut links = handle.link().get().set_name_filter(iface).execute();
+            let mut links = state
+                .nl_handler
+                .link()
+                .get()
+                .set_name_filter(iface)
+                .execute();
             if let Some(link) = links
                 .try_next()
                 .await
                 .map_err(|e| FError::NetworkingError(format!("{}", e)))?
             {
-                handle
+                state
+                    .nl_handler
                     .address()
                     .add(link.header.index, addr, prefix)
                     .execute()
@@ -2925,21 +2980,24 @@ impl LinuxNetwork {
         use netlink_packet_route::rtnl::address::nlas::Nla;
         use netlink_packet_route::rtnl::address::AddressMessage;
         state.tokio_rt.block_on(async {
-            let (connection, handle, _) = new_connection().unwrap();
-            tokio::spawn(connection);
-
             let octets = match addr {
                 IPAddress::V4(a) => a.octets().to_vec(),
                 IPAddress::V6(a) => a.octets().to_vec(),
             };
             let mut nl_addresses = Vec::new();
-            let mut links = handle.link().get().set_name_filter(iface.clone()).execute();
+            let mut links = state
+                .nl_handler
+                .link()
+                .get()
+                .set_name_filter(iface.clone())
+                .execute();
             if let Some(link) = links
                 .try_next()
                 .await
                 .map_err(|e| FError::NetworkingError(format!("{}", e)))?
             {
-                let mut addresses = handle
+                let mut addresses = state
+                    .nl_handler
                     .address()
                     .get()
                     .set_link_index_filter(link.header.index)
@@ -2964,7 +3022,8 @@ impl LinuxNetwork {
                             header: hdr,
                             nlas: vec![Nla::Address(addr)],
                         };
-                        handle
+                        state
+                            .nl_handler
                             .address()
                             .del(msg)
                             .execute()
@@ -2986,18 +3045,21 @@ impl LinuxNetwork {
         use netlink_packet_route::rtnl::address::nlas::Nla;
         use netlink_packet_route::rtnl::address::AddressMessage;
         state.tokio_rt.block_on(async {
-            let (connection, handle, _) = new_connection().unwrap();
-            tokio::spawn(connection);
-
             let mut nl_addresses = Vec::new();
             let mut f_addresses: Vec<IPAddress> = Vec::new();
-            let mut links = handle.link().get().set_name_filter(iface.clone()).execute();
+            let mut links = state
+                .nl_handler
+                .link()
+                .get()
+                .set_name_filter(iface.clone())
+                .execute();
             if let Some(link) = links
                 .try_next()
                 .await
                 .map_err(|e| FError::NetworkingError(format!("{}", e)))?
             {
-                let mut addresses = handle
+                let mut addresses = state
+                    .nl_handler
                     .address()
                     .get()
                     .set_link_index_filter(link.header.index)
@@ -3040,15 +3102,19 @@ impl LinuxNetwork {
         log::trace!("set_iface_name {} {}", iface, new_name);
         let mut state = self.state.write().await;
         state.tokio_rt.block_on(async {
-            let (connection, handle, _) = new_connection().unwrap();
-            tokio::spawn(connection);
-            let mut links = handle.link().get().set_name_filter(iface).execute();
+            let mut links = state
+                .nl_handler
+                .link()
+                .get()
+                .set_name_filter(iface)
+                .execute();
             if let Some(link) = links
                 .try_next()
                 .await
                 .map_err(|e| FError::NetworkingError(format!("{}", e)))?
             {
-                handle
+                state
+                    .nl_handler
                     .link()
                     .set(link.header.index)
                     .name(new_name)
@@ -3065,15 +3131,19 @@ impl LinuxNetwork {
         log::trace!("set_iface_mac {} {:?}", iface, address);
         let mut state = self.state.write().await;
         state.tokio_rt.block_on(async {
-            let (connection, handle, _) = new_connection().unwrap();
-            tokio::spawn(connection);
-            let mut links = handle.link().get().set_name_filter(iface).execute();
+            let mut links = state
+                .nl_handler
+                .link()
+                .get()
+                .set_name_filter(iface)
+                .execute();
             if let Some(link) = links
                 .try_next()
                 .await
                 .map_err(|e| FError::NetworkingError(format!("{}", e)))?
             {
-                handle
+                state
+                    .nl_handler
                     .link()
                     .set(link.header.index)
                     .address(address)
@@ -3093,15 +3163,19 @@ impl LinuxNetwork {
         let mut state = self.state.write().await;
         let nsfile = std::fs::File::open(netns)?;
         state.tokio_rt.block_on(async {
-            let (connection, handle, _) = new_connection().unwrap();
-            tokio::spawn(connection);
-            let mut links = handle.link().get().set_name_filter(iface).execute();
+            let mut links = state
+                .nl_handler
+                .link()
+                .get()
+                .set_name_filter(iface)
+                .execute();
             if let Some(link) = links
                 .try_next()
                 .await
                 .map_err(|e| FError::NetworkingError(format!("{}", e)))?
             {
-                handle
+                state
+                    .nl_handler
                     .link()
                     .set(link.header.index)
                     .setns_by_fd(nsfile.into_raw_fd())
@@ -3118,15 +3192,19 @@ impl LinuxNetwork {
         log::trace!("set_iface_default_ns {}", iface);
         let mut state = self.state.write().await;
         state.tokio_rt.block_on(async {
-            let (connection, handle, _) = new_connection().unwrap();
-            tokio::spawn(connection);
-            let mut links = handle.link().get().set_name_filter(iface).execute();
+            let mut links = state
+                .nl_handler
+                .link()
+                .get()
+                .set_name_filter(iface)
+                .execute();
             if let Some(link) = links
                 .try_next()
                 .await
                 .map_err(|e| FError::NetworkingError(format!("{}", e)))?
             {
-                handle
+                state
+                    .nl_handler
                     .link()
                     .set(link.header.index)
                     .setns_by_pid(0)
@@ -3143,15 +3221,19 @@ impl LinuxNetwork {
         log::trace!("set_iface_up {}", iface);
         let mut state = self.state.write().await;
         state.tokio_rt.block_on(async {
-            let (connection, handle, _) = new_connection().unwrap();
-            tokio::spawn(connection);
-            let mut links = handle.link().get().set_name_filter(iface).execute();
+            let mut links = state
+                .nl_handler
+                .link()
+                .get()
+                .set_name_filter(iface)
+                .execute();
             if let Some(link) = links
                 .try_next()
                 .await
                 .map_err(|e| FError::NetworkingError(format!("{}", e)))?
             {
-                handle
+                state
+                    .nl_handler
                     .link()
                     .set(link.header.index)
                     .up()
@@ -3168,15 +3250,19 @@ impl LinuxNetwork {
         log::trace!("set_iface_down {}", iface);
         let mut state = self.state.write().await;
         state.tokio_rt.block_on(async {
-            let (connection, handle, _) = new_connection().unwrap();
-            tokio::spawn(connection);
-            let mut links = handle.link().get().set_name_filter(iface).execute();
+            let mut links = state
+                .nl_handler
+                .link()
+                .get()
+                .set_name_filter(iface)
+                .execute();
             if let Some(link) = links
                 .try_next()
                 .await
                 .map_err(|e| FError::NetworkingError(format!("{}", e)))?
             {
-                handle
+                state
+                    .nl_handler
                     .link()
                     .set(link.header.index)
                     .down()
@@ -3193,9 +3279,12 @@ impl LinuxNetwork {
         log::trace!("iface_exists {}", iface);
         let mut state = self.state.write().await;
         state.tokio_rt.block_on(async {
-            let (connection, handle, _) = new_connection().unwrap();
-            tokio::spawn(connection);
-            let mut links = handle.link().get().set_name_filter(iface).execute();
+            let mut links = state
+                .nl_handler
+                .link()
+                .get()
+                .set_name_filter(iface)
+                .execute();
             if let Some(link) = links
                 .try_next()
                 .await
@@ -3206,6 +3295,16 @@ impl LinuxNetwork {
                 Ok(false)
             }
         })
+    }
+
+    async fn spawn_dnsmasq(&self, config_file: String) -> FResult<Child> {
+        let child = Command::new("dnsmasq")
+            .arg("-C")
+            .arg(config_file)
+            .stdin(Stdio::null())
+            .spawn()
+            .map_err(|e| FError::NetworkingError(format!("{}", e)))?;
+        Ok(child)
     }
 
     async fn create_dnsmasq_config(

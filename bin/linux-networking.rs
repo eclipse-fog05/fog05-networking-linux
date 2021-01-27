@@ -63,7 +63,9 @@ async fn main() {
     let zenoh = Arc::new(zenoh::net::open(zproperties.into()).await.unwrap());
     let zconnector = Arc::new(ZConnector::new(z.clone(), None, None));
 
-    let mut net = LinuxNetwork::new(zenoh.clone(), zconnector.clone(), my_pid, config).unwrap();
+    let mut net = LinuxNetwork::new(zenoh.clone(), zconnector.clone(), my_pid, config)
+        .await
+        .unwrap();
 
     let (s, h) = net.start().await;
 

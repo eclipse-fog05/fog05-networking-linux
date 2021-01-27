@@ -74,12 +74,17 @@ struct NSManagerArgs {
     id: Uuid,
 }
 
+pub struct NSManagerState {
+    pub tokio_rt: tokio::runtime::Runtime,
+    pub nl_handler: rtnetlink::Handle,
+}
+
 #[derive(Clone)]
 pub struct NSManager {
     pub z: Arc<zenoh::net::Session>,
     pub pid: u32,
     pub uuid: Uuid,
-    pub rt: Arc<RwLock<tokio::runtime::Runtime>>,
+    pub state: Arc<RwLock<NSManagerState>>,
 }
 
 fn main() {
@@ -178,7 +183,7 @@ fn main() {
                 let zproperties = Properties::from(properties);
                 let zenoh = Arc::new(zenoh::net::open(zproperties.into()).await.unwrap());
 
-                let mut manager = match NSManager::new(zenoh, my_pid, args.id, rt) {
+                let mut manager = match NSManager::new(zenoh, my_pid, args.id, rt).await {
                     Ok(m) => m,
                     Err(e) => {
                         log::error!("Error when creating manager: {}", e);
@@ -239,17 +244,32 @@ fn main() {
 }
 
 impl NSManager {
-    pub fn new(
+    pub async fn new(
         z: Arc<zenoh::net::Session>,
         pid: u32,
         uuid: Uuid,
         rt: tokio::runtime::Runtime,
     ) -> FResult<Self> {
+        // This will disappear once netlink merges async-std support
+        let handle = rt
+            .spawn_blocking(|| {
+                let (connection, handle, _) = new_connection().unwrap();
+                tokio::spawn(connection);
+                handle
+            })
+            .await
+            .map_err(|e| FError::NetworkingError(format!("{}", e)))?;
+
+        let state = NSManagerState {
+            tokio_rt: rt,
+            nl_handler: handle,
+        };
+
         Ok(Self {
             z,
             pid,
             uuid,
-            rt: Arc::new(RwLock::new(rt)),
+            state: Arc::new(RwLock::new(state)),
         })
     }
 
@@ -266,10 +286,6 @@ impl NSManager {
         let (sender, handle) = ns_manager_server.start().await?;
 
         log::trace!("Interfaces in namespace {:?}", self.dump_links().await);
-        // loop {
-        //     //log::info!("Doing nothing...");
-        //     task::sleep(Duration::from_secs(600)).await;
-        // }
 
         stop.recv().await;
 
@@ -304,40 +320,50 @@ impl NSManager {
 
     async fn create_bridge(&self, br_name: String) -> FResult<()> {
         log::trace!("create_bridge {}", br_name);
-        let mut tokio_rt = self.rt.write().await;
-        tokio_rt
+        let mut state = self.state.write().await;
+        state
+            .tokio_rt
             .block_on(async {
-                let (connection, handle, _) = new_connection().unwrap();
-                tokio::spawn(connection);
-                handle.link().add().bridge(br_name).execute().await
+                state
+                    .nl_handler
+                    .link()
+                    .add()
+                    .bridge(br_name)
+                    .execute()
+                    .await
             })
             .map_err(|e| FError::NetworkingError(format!("{}", e)))
     }
 
     async fn create_veth(&self, iface_i: String, iface_e: String) -> FResult<()> {
-        let mut tokio_rt = self.rt.write().await;
-        tokio_rt
+        let mut state = self.state.write().await;
+        state
+            .tokio_rt
             .block_on(async {
-                let (connection, handle, _) = new_connection().unwrap();
-                tokio::spawn(connection);
-                handle.link().add().veth(iface_i, iface_e).execute().await
+                state
+                    .nl_handler
+                    .link()
+                    .add()
+                    .veth(iface_i, iface_e)
+                    .execute()
+                    .await
             })
             .map_err(|e| FError::NetworkingError(format!("{}", e)))
     }
 
     async fn create_vlan(&self, iface: String, dev: String, tag: u16) -> FResult<()> {
-        let mut tokio_rt = self.rt.write().await;
-        tokio_rt
+        let mut state = self.state.write().await;
+        state
+            .tokio_rt
             .block_on(async {
-                let (connection, handle, _) = new_connection().unwrap();
-                tokio::spawn(connection);
-                let mut links = handle.link().get().set_name_filter(dev).execute();
+                let mut links = state.nl_handler.link().get().set_name_filter(dev).execute();
                 if let Some(link) = links
                     .try_next()
                     .await
                     .map_err(|e| FError::NetworkingError(format!("{}", e)))?
                 {
-                    handle
+                    state
+                        .nl_handler
                         .link()
                         .add()
                         .vlan(iface, link.header.index, tag)
@@ -367,18 +393,18 @@ impl NSManager {
             mcast_addr,
             port
         );
-        let mut tokio_rt = self.rt.write().await;
-        tokio_rt
+        let mut state = self.state.write().await;
+        state
+            .tokio_rt
             .block_on(async {
-                let (connection, handle, _) = new_connection().unwrap();
-                tokio::spawn(connection);
-                let mut links = handle.link().get().set_name_filter(dev).execute();
+                let mut links = state.nl_handler.link().get().set_name_filter(dev).execute();
                 if let Some(link) = links
                     .try_next()
                     .await
                     .map_err(|e| FError::NetworkingError(format!("{}", e)))?
                 {
-                    let vxlan = handle
+                    let vxlan = state
+                        .nl_handler
                         .link()
                         .add()
                         .vxlan(iface, vni)
@@ -419,18 +445,18 @@ impl NSManager {
             remote_addr,
             port
         );
-        let mut tokio_rt = self.rt.write().await;
-        tokio_rt
+        let mut state = self.state.write().await;
+        state
+            .tokio_rt
             .block_on(async {
-                let (connection, handle, _) = new_connection().unwrap();
-                tokio::spawn(connection);
-                let mut links = handle.link().get().set_name_filter(dev).execute();
+                let mut links = state.nl_handler.link().get().set_name_filter(dev).execute();
                 if let Some(link) = links
                     .try_next()
                     .await
                     .map_err(|e| FError::NetworkingError(format!("{}", e)))?
                 {
-                    let vxlan = handle
+                    let vxlan = state
+                        .nl_handler
                         .link()
                         .add()
                         .vxlan(iface, vni)
@@ -460,17 +486,21 @@ impl NSManager {
 
     async fn del_iface(&self, iface: String) -> FResult<()> {
         log::trace!("del_iface {}", iface);
-        let mut tokio_rt = self.rt.write().await;
-        tokio_rt.block_on(async {
-            let (connection, handle, _) = new_connection().unwrap();
-            tokio::spawn(connection);
-            let mut links = handle.link().get().set_name_filter(iface).execute();
+        let mut state = self.state.write().await;
+        state.tokio_rt.block_on(async {
+            let mut links = state
+                .nl_handler
+                .link()
+                .get()
+                .set_name_filter(iface)
+                .execute();
             if let Some(link) = links
                 .try_next()
                 .await
                 .map_err(|e| FError::NetworkingError(format!("{}", e)))?
             {
-                handle
+                state
+                    .nl_handler
                     .link()
                     .del(link.header.index)
                     .execute()
@@ -484,23 +514,32 @@ impl NSManager {
 
     async fn set_iface_master(&self, iface: String, master: String) -> FResult<()> {
         log::trace!("set_iface_master {} {}", iface, master);
-        let mut tokio_rt = self.rt.write().await;
-        tokio_rt.block_on(async {
-            let (connection, handle, _) = new_connection().unwrap();
-            tokio::spawn(connection);
-            let mut links = handle.link().get().set_name_filter(iface).execute();
+        let mut state = self.state.write().await;
+        state.tokio_rt.block_on(async {
+            let mut links = state
+                .nl_handler
+                .link()
+                .get()
+                .set_name_filter(iface)
+                .execute();
             if let Some(link) = links
                 .try_next()
                 .await
                 .map_err(|e| FError::NetworkingError(format!("{}", e)))?
             {
-                let mut masters = handle.link().get().set_name_filter(master).execute();
+                let mut masters = state
+                    .nl_handler
+                    .link()
+                    .get()
+                    .set_name_filter(master)
+                    .execute();
                 if let Some(master) = masters
                     .try_next()
                     .await
                     .map_err(|e| FError::NetworkingError(format!("{}", e)))?
                 {
-                    handle
+                    state
+                        .nl_handler
                         .link()
                         .set(link.header.index)
                         .master(master.header.index)
@@ -520,17 +559,21 @@ impl NSManager {
 
     async fn del_iface_master(&self, iface: String) -> FResult<()> {
         log::trace!("del_iface_master {}", iface);
-        let mut tokio_rt = self.rt.write().await;
-        tokio_rt.block_on(async {
-            let (connection, handle, _) = new_connection().unwrap();
-            tokio::spawn(connection);
-            let mut links = handle.link().get().set_name_filter(iface).execute();
+        let mut state = self.state.write().await;
+        state.tokio_rt.block_on(async {
+            let mut links = state
+                .nl_handler
+                .link()
+                .get()
+                .set_name_filter(iface)
+                .execute();
             if let Some(link) = links
                 .try_next()
                 .await
                 .map_err(|e| FError::NetworkingError(format!("{}", e)))?
             {
-                handle
+                state
+                    .nl_handler
                     .link()
                     .set(link.header.index)
                     .nomaster()
@@ -545,17 +588,21 @@ impl NSManager {
     }
 
     async fn add_iface_address(&self, iface: String, addr: IPAddress, prefix: u8) -> FResult<()> {
-        let mut tokio_rt = self.rt.write().await;
-        tokio_rt.block_on(async {
-            let (connection, handle, _) = new_connection().unwrap();
-            tokio::spawn(connection);
-            let mut links = handle.link().get().set_name_filter(iface).execute();
+        let mut state = self.state.write().await;
+        state.tokio_rt.block_on(async {
+            let mut links = state
+                .nl_handler
+                .link()
+                .get()
+                .set_name_filter(iface)
+                .execute();
             if let Some(link) = links
                 .try_next()
                 .await
                 .map_err(|e| FError::NetworkingError(format!("{}", e)))?
             {
-                handle
+                state
+                    .nl_handler
                     .address()
                     .add(link.header.index, addr, prefix)
                     .execute()
@@ -569,22 +616,25 @@ impl NSManager {
 
     async fn get_iface_addresses(&self, iface: String) -> FResult<Vec<IPAddress>> {
         log::trace!("get_iface_addresses {}", iface);
-        let mut tokio_rt = self.rt.write().await;
+        let mut state = self.state.write().await;
         use netlink_packet_route::rtnl::address::nlas::Nla;
         use netlink_packet_route::rtnl::address::AddressMessage;
-        tokio_rt.block_on(async {
-            let (connection, handle, _) = new_connection().unwrap();
-            tokio::spawn(connection);
-
+        state.tokio_rt.block_on(async {
             let mut nl_addresses = Vec::new();
             let mut f_addresses: Vec<IPAddress> = Vec::new();
-            let mut links = handle.link().get().set_name_filter(iface.clone()).execute();
+            let mut links = state
+                .nl_handler
+                .link()
+                .get()
+                .set_name_filter(iface.clone())
+                .execute();
             if let Some(link) = links
                 .try_next()
                 .await
                 .map_err(|e| FError::NetworkingError(format!("{}", e)))?
             {
-                let mut addresses = handle
+                let mut addresses = state
+                    .nl_handler
                     .address()
                     .get()
                     .set_link_index_filter(link.header.index)
@@ -624,25 +674,28 @@ impl NSManager {
     }
 
     async fn del_iface_address(&self, iface: String, addr: IPAddress) -> FResult<()> {
-        let mut tokio_rt = self.rt.write().await;
+        let mut state = self.state.write().await;
         use netlink_packet_route::rtnl::address::nlas::Nla;
         use netlink_packet_route::rtnl::address::AddressMessage;
-        tokio_rt.block_on(async {
-            let (connection, handle, _) = new_connection().unwrap();
-            tokio::spawn(connection);
-
+        state.tokio_rt.block_on(async {
             let octets = match addr {
                 IPAddress::V4(a) => a.octets().to_vec(),
                 IPAddress::V6(a) => a.octets().to_vec(),
             };
             let mut nl_addresses = Vec::new();
-            let mut links = handle.link().get().set_name_filter(iface.clone()).execute();
+            let mut links = state
+                .nl_handler
+                .link()
+                .get()
+                .set_name_filter(iface.clone())
+                .execute();
             if let Some(link) = links
                 .try_next()
                 .await
                 .map_err(|e| FError::NetworkingError(format!("{}", e)))?
             {
-                let mut addresses = handle
+                let mut addresses = state
+                    .nl_handler
                     .address()
                     .get()
                     .set_link_index_filter(link.header.index)
@@ -667,7 +720,8 @@ impl NSManager {
                             header: hdr,
                             nlas: vec![Nla::Address(addr)],
                         };
-                        handle
+                        state
+                            .nl_handler
                             .address()
                             .del(msg)
                             .execute()
@@ -684,17 +738,21 @@ impl NSManager {
     }
 
     async fn set_iface_name(&self, iface: String, new_name: String) -> FResult<()> {
-        let mut tokio_rt = self.rt.write().await;
-        tokio_rt.block_on(async {
-            let (connection, handle, _) = new_connection().unwrap();
-            tokio::spawn(connection);
-            let mut links = handle.link().get().set_name_filter(iface).execute();
+        let mut state = self.state.write().await;
+        state.tokio_rt.block_on(async {
+            let mut links = state
+                .nl_handler
+                .link()
+                .get()
+                .set_name_filter(iface)
+                .execute();
             if let Some(link) = links
                 .try_next()
                 .await
                 .map_err(|e| FError::NetworkingError(format!("{}", e)))?
             {
-                handle
+                state
+                    .nl_handler
                     .link()
                     .set(link.header.index)
                     .name(new_name)
@@ -708,17 +766,21 @@ impl NSManager {
     }
 
     async fn set_iface_mac(&self, iface: String, address: Vec<u8>) -> FResult<()> {
-        let mut tokio_rt = self.rt.write().await;
-        tokio_rt.block_on(async {
-            let (connection, handle, _) = new_connection().unwrap();
-            tokio::spawn(connection);
-            let mut links = handle.link().get().set_name_filter(iface).execute();
+        let mut state = self.state.write().await;
+        state.tokio_rt.block_on(async {
+            let mut links = state
+                .nl_handler
+                .link()
+                .get()
+                .set_name_filter(iface)
+                .execute();
             if let Some(link) = links
                 .try_next()
                 .await
                 .map_err(|e| FError::NetworkingError(format!("{}", e)))?
             {
-                handle
+                state
+                    .nl_handler
                     .link()
                     .set(link.header.index)
                     .address(address)
@@ -732,17 +794,21 @@ impl NSManager {
     }
 
     async fn set_iface_default_ns(&self, iface: String) -> FResult<()> {
-        let mut tokio_rt = self.rt.write().await;
-        tokio_rt.block_on(async {
-            let (connection, handle, _) = new_connection().unwrap();
-            tokio::spawn(connection);
-            let mut links = handle.link().get().set_name_filter(iface).execute();
+        let mut state = self.state.write().await;
+        state.tokio_rt.block_on(async {
+            let mut links = state
+                .nl_handler
+                .link()
+                .get()
+                .set_name_filter(iface)
+                .execute();
             if let Some(link) = links
                 .try_next()
                 .await
                 .map_err(|e| FError::NetworkingError(format!("{}", e)))?
             {
-                handle
+                state
+                    .nl_handler
                     .link()
                     .set(link.header.index)
                     .setns_by_pid(1)
@@ -757,17 +823,21 @@ impl NSManager {
 
     async fn set_iface_up(&self, iface: String) -> FResult<()> {
         log::trace!("set_iface_up {}", iface);
-        let mut tokio_rt = self.rt.write().await;
-        tokio_rt.block_on(async {
-            let (connection, handle, _) = new_connection().unwrap();
-            tokio::spawn(connection);
-            let mut links = handle.link().get().set_name_filter(iface).execute();
+        let mut state = self.state.write().await;
+        state.tokio_rt.block_on(async {
+            let mut links = state
+                .nl_handler
+                .link()
+                .get()
+                .set_name_filter(iface)
+                .execute();
             if let Some(link) = links
                 .try_next()
                 .await
                 .map_err(|e| FError::NetworkingError(format!("{}", e)))?
             {
-                handle
+                state
+                    .nl_handler
                     .link()
                     .set(link.header.index)
                     .up()
@@ -781,17 +851,21 @@ impl NSManager {
     }
 
     async fn set_iface_down(&self, iface: String) -> FResult<()> {
-        let mut tokio_rt = self.rt.write().await;
-        tokio_rt.block_on(async {
-            let (connection, handle, _) = new_connection().unwrap();
-            tokio::spawn(connection);
-            let mut links = handle.link().get().set_name_filter(iface).execute();
+        let mut state = self.state.write().await;
+        state.tokio_rt.block_on(async {
+            let mut links = state
+                .nl_handler
+                .link()
+                .get()
+                .set_name_filter(iface)
+                .execute();
             if let Some(link) = links
                 .try_next()
                 .await
                 .map_err(|e| FError::NetworkingError(format!("{}", e)))?
             {
-                handle
+                state
+                    .nl_handler
                     .link()
                     .set(link.header.index)
                     .down()
@@ -806,11 +880,14 @@ impl NSManager {
 
     async fn iface_exists(&self, iface: String) -> FResult<bool> {
         log::trace!("iface_exists {}", iface);
-        let mut tokio_rt = self.rt.write().await;
-        tokio_rt.block_on(async {
-            let (connection, handle, _) = new_connection().unwrap();
-            tokio::spawn(connection);
-            let mut links = handle.link().get().set_name_filter(iface).execute();
+        let mut state = self.state.write().await;
+        state.tokio_rt.block_on(async {
+            let mut links = state
+                .nl_handler
+                .link()
+                .get()
+                .set_name_filter(iface)
+                .execute();
             if let Some(link) = links
                 .try_next()
                 .await
@@ -826,11 +903,9 @@ impl NSManager {
     async fn dump_links(&self) -> FResult<Vec<String>> {
         log::trace!("dump_links");
         let mut ifaces = Vec::new();
-        let mut tokio_rt = self.rt.write().await;
-        tokio_rt.block_on(async {
-            let (connection, handle, _) = new_connection().unwrap();
-            tokio::spawn(connection);
-            let mut links = handle.link().get().execute();
+        let mut state = self.state.write().await;
+        state.tokio_rt.block_on(async {
+            let mut links = state.nl_handler.link().get().execute();
             while let Some(msg) = links
                 .try_next()
                 .await
