@@ -357,30 +357,9 @@ impl NetworkingPlugin for LinuxNetwork {
             )
             .await?;
 
-        self.connector
-            .global
-            .add_node_interface(node_uuid, &v_bridge)
-            .await?;
+        self.connector.local.add_interface(&v_bridge).await?;
 
-        self.connector
-            .global
-            .add_node_interface(node_uuid, &v_vxl)
-            .await?;
-
-        // self.connector
-        //     .global
-        //     .add_node_interface(node_uuid, &v_veth_e)
-        //     .await?;
-
-        // self.connector
-        //     .global
-        //     .add_node_interface(node_uuid, &v_veth_i)
-        //     .await?;
-
-        // self.connector
-        //     .global
-        //     .add_node_network_namespace(node_uuid, &default_netns)
-        //     .await?;
+        self.connector.local.add_interface(&v_vxl).await?;
 
         let internals = VirtualNetworkInternals {
             // associated_netns_name: default_netns_name,
@@ -392,8 +371,8 @@ impl NetworkingPlugin for LinuxNetwork {
         default_vnet.plugin_internals = Some(serialize_network_internals(&internals)?);
 
         self.connector
-            .global
-            .add_node_virutal_network(node_uuid, &default_vnet)
+            .local
+            .add_virutal_network(&default_vnet)
             .await?;
 
         log::debug!(
@@ -455,21 +434,14 @@ impl NetworkingPlugin for LinuxNetwork {
         let node_uuid = self.agent.as_ref().unwrap().get_node_uuid().await??;
         match self.connector.global.get_virtual_network(vnet_uuid).await {
             Ok(mut vnet) => {
-                if let Ok(net) = self
-                    .connector
-                    .global
-                    .get_node_virtual_network(node_uuid, vnet_uuid).await
-                {
+                if let Ok(net) = self.connector.local.get_virtual_network(vnet_uuid).await {
                     return Ok(net);
                 }
                 match vnet.clone().link_kind {
                     LinkKind::L2(link_kind_info) => {
                         //Multicast-based VxLAN
                         let vnet = self.mcast_vxlan_create(vnet, link_kind_info).await?;
-                        self.connector
-                            .global
-                            .add_node_virutal_network(node_uuid, &vnet)
-                            .await?;
+                        self.connector.local.add_virutal_network(&vnet).await?;
                         Ok(vnet)
                     }
                     // Unimplemented for other virtual networks kinds
@@ -489,20 +461,12 @@ impl NetworkingPlugin for LinuxNetwork {
 
     async fn get_virtual_network(&self, vnet_uuid: Uuid) -> FResult<VirtualNetwork> {
         let node_uuid = self.agent.as_ref().unwrap().get_node_uuid().await??;
-        self.connector
-            .global
-            .get_node_virtual_network(node_uuid, vnet_uuid)
-            .await
+        self.connector.local.get_virtual_network(vnet_uuid).await
     }
 
     async fn delete_virtual_network(&self, vnet_uuid: Uuid) -> FResult<VirtualNetwork> {
         let node_uuid = self.agent.as_ref().unwrap().get_node_uuid().await??;
-        match self
-            .connector
-            .global
-            .get_node_virtual_network(node_uuid, vnet_uuid)
-            .await
-        {
+        match self.connector.local.get_virtual_network(vnet_uuid).await {
             Err(_) => Err(FError::NotFound),
             Ok(vnet) => {
                 // if !vnet.interfaces.is_empty() {
@@ -531,8 +495,8 @@ impl NetworkingPlugin for LinuxNetwork {
                 }
 
                 self.connector
-                    .global
-                    .remove_node_virtual_network(node_uuid, vnet_uuid)
+                    .local
+                    .remove_virtual_network(vnet_uuid)
                     .await?;
                 Ok(vnet)
             }
@@ -545,8 +509,8 @@ impl NetworkingPlugin for LinuxNetwork {
         // let cp_uuid = Uuid::new_v4();
         // match self
         //     .connector
-        //     .global
-        //     .get_node_connection_point(node_uuid, cp_uuid)
+        //     .local
+        //     .get_connection_point(cp_uuid)
         //     .await
         // {
         //     Err(_) => {
@@ -558,8 +522,8 @@ impl NetworkingPlugin for LinuxNetwork {
         //             external_veth: Uuid::new_v4(),
         //         };
         //         self.connector
-        //             .global
-        //             .add_node_connection_point(node_uuid, &cp)
+        //             .local
+        //             .add_connection_point(&cp)
         //             .await?;
         //         Ok(cp)
         //     }
@@ -571,8 +535,8 @@ impl NetworkingPlugin for LinuxNetwork {
         Err(FError::Unimplemented)
         // let node_uuid = self.agent.as_ref().unwrap().get_node_uuid().await??;
         // self.connector
-        //     .global
-        //     .get_node_connection_point(node_uuid, cp_uuid)
+        //     .local
+        //     .get_connection_point(cp_uuid)
         //     .await
     }
 
@@ -581,15 +545,15 @@ impl NetworkingPlugin for LinuxNetwork {
         // let node_uuid = self.agent.as_ref().unwrap().get_node_uuid().await??;
         // match self
         //     .connector
-        //     .global
-        //     .get_node_connection_point(node_uuid, cp_uuid)
+        //     .local
+        //     .get_connection_point(cp_uuid)
         //     .await
         // {
         //     Err(_) => Err(FError::NotFound),
         //     Ok(_) => {
         //         self.connector
-        //             .global
-        //             .remove_node_connection_point(node_uuid, cp_uuid)
+        //             .local
+        //             .remove_connection_point(cp_uuid)
         //             .await?;
         //         Ok(cp_uuid)
         //     }
@@ -628,10 +592,7 @@ impl NetworkingPlugin for LinuxNetwork {
                 )
                 .await?;
 
-                self.connector
-                    .global
-                    .add_node_interface(node_uuid, &v_iface)
-                    .await?;
+                self.connector.local.add_interface(&v_iface).await?;
                 Ok(v_iface)
             }
             VirtualInterfaceConfigKind::BRIDGE => {
@@ -647,10 +608,7 @@ impl NetworkingPlugin for LinuxNetwork {
 
                 self.create_bridge(intf.if_name).await?;
 
-                self.connector
-                    .global
-                    .add_node_interface(node_uuid, &v_iface)
-                    .await?;
+                self.connector.local.add_interface(&v_iface).await?;
                 Ok(v_iface)
             }
             VirtualInterfaceConfigKind::VETH => {
@@ -685,12 +643,12 @@ impl NetworkingPlugin for LinuxNetwork {
                 self.create_veth(intf.if_name, external_face_name).await?;
 
                 self.connector
-                    .global
-                    .add_node_interface(node_uuid, &v_iface_internal)
+                    .local
+                    .add_interface(&v_iface_internal)
                     .await?;
                 self.connector
-                    .global
-                    .add_node_interface(node_uuid, &v_iface_external)
+                    .local
+                    .add_interface(&v_iface_external)
                     .await?;
                 Ok(v_iface_internal)
             }
@@ -712,10 +670,7 @@ impl NetworkingPlugin for LinuxNetwork {
                 self.create_vlan(intf.if_name, ext_face.if_name, conf.tag)
                     .await?;
 
-                self.connector
-                    .global
-                    .add_node_interface(node_uuid, &v_iface)
-                    .await?;
+                self.connector.local.add_interface(&v_iface).await?;
                 Ok(v_iface)
             }
             VirtualInterfaceConfigKind::MACVLAN => {
@@ -732,8 +687,8 @@ impl NetworkingPlugin for LinuxNetwork {
                 };
                 Err(FError::Unimplemented)
                 // self.connector
-                //     .global
-                //     .add_node_interface(node_uuid, &v_iface)
+                //.local
+                //.add_interface(&v_iface)
                 //     .await?;
                 // Ok(v_iface)
             }
@@ -753,8 +708,8 @@ impl NetworkingPlugin for LinuxNetwork {
                 };
                 Err(FError::Unimplemented)
                 // self.connector
-                //     .global
-                //     .add_node_interface(node_uuid, &v_iface)
+                //.local
+                //.add_interface(&v_iface)
                 //     .await?;
                 // Ok(v_iface)
             }
@@ -774,8 +729,8 @@ impl NetworkingPlugin for LinuxNetwork {
                 };
                 Err(FError::Unimplemented)
                 // self.connector
-                //     .global
-                //     .add_node_interface(node_uuid, &v_iface)
+                //.local
+                //.add_interface(&v_iface)
                 //     .await?;
                 // Ok(v_iface)
             }
@@ -795,8 +750,8 @@ impl NetworkingPlugin for LinuxNetwork {
                 };
                 Err(FError::Unimplemented)
                 // self.connector
-                //     .global
-                //     .add_node_interface(node_uuid, &v_iface)
+                //.local
+                //.add_interface(&v_iface)
                 //     .await?;
                 // Ok(v_iface)
             }
@@ -816,8 +771,8 @@ impl NetworkingPlugin for LinuxNetwork {
                 };
                 Err(FError::Unimplemented)
                 // self.connector
-                //     .global
-                //     .add_node_interface(node_uuid, &v_iface)
+                //.local
+                //.add_interface(&v_iface)
                 //     .await?;
                 // Ok(v_iface)
             }
@@ -826,21 +781,13 @@ impl NetworkingPlugin for LinuxNetwork {
 
     async fn get_virtual_interface(&self, intf_uuid: Uuid) -> FResult<VirtualInterface> {
         let node_uuid = self.agent.as_ref().unwrap().get_node_uuid().await??;
-        self.connector
-            .global
-            .get_node_interface(node_uuid, intf_uuid)
-            .await
+        self.connector.local.get_interface(intf_uuid).await
     }
 
     async fn delete_virtual_interface(&self, intf_uuid: Uuid) -> FResult<VirtualInterface> {
         log::trace!("delete_virtual_interface({})", intf_uuid);
         let node_uuid = self.agent.as_ref().unwrap().get_node_uuid().await??;
-        match self
-            .connector
-            .global
-            .get_node_interface(node_uuid, intf_uuid)
-            .await
-        {
+        match self.connector.local.get_interface(intf_uuid).await {
             Err(e) => {
                 log::error!("Unable to find interface {}, error: {}", intf_uuid, e);
                 Err(FError::NotFound)
@@ -849,11 +796,7 @@ impl NetworkingPlugin for LinuxNetwork {
                 log::error!("Delete Interface: {:?}", intf);
                 match intf.net_ns {
                     Some(ns_uuid) => {
-                        let netns = self
-                            .connector
-                            .global
-                            .get_node_network_namespace(node_uuid, ns_uuid)
-                            .await?;
+                        let netns = self.connector.local.get_network_namespace(ns_uuid).await?;
                         let ns_manager = self.get_ns_manager(&ns_uuid).await?;
                         let res = ns_manager.del_virtual_interface(intf.if_name.clone()).await;
                         log::info!(
@@ -870,12 +813,7 @@ impl NetworkingPlugin for LinuxNetwork {
                             if let VirtualInterfaceKind::VETH(VETHKind { pair, internal }) =
                                 intf.kind
                             {
-                                if let Err(e) = self
-                                    .connector
-                                    .global
-                                    .get_node_interface(node_uuid, pair)
-                                    .await
-                                {
+                                if let Err(e) = self.connector.local.get_interface(pair).await {
                                     log::warn!("Other end of veth pair was already removed: {}", e);
                                     return Ok(intf);
                                 }
@@ -886,26 +824,15 @@ impl NetworkingPlugin for LinuxNetwork {
                             }
                             return Err(e);
                         }
-                        self.connector
-                            .global
-                            .remove_node_interface(node_uuid, intf_uuid)
-                            .await?;
+                        self.connector.local.remove_interface(intf_uuid).await?;
                         Ok(intf)
                     }
                     None => {
                         if let VirtualInterfaceKind::VETH(ref info) = intf.kind {
-                            if let Ok(pair) = self
-                                .connector
-                                .global
-                                .get_node_interface(node_uuid, info.pair)
-                                .await
-                            {
+                            if let Ok(pair) = self.connector.local.get_interface(info.pair).await {
                                 self.del_iface(intf.if_name.clone()).await;
                                 self.del_iface(pair.if_name.clone()).await;
-                                self.connector
-                                    .global
-                                    .remove_node_interface(node_uuid, info.pair)
-                                    .await?;
+                                self.connector.local.remove_interface(info.pair).await?;
                             } else {
                                 log::trace!("Peer was alredy removed...");
                                 self.del_iface(intf.if_name.clone()).await;
@@ -913,10 +840,7 @@ impl NetworkingPlugin for LinuxNetwork {
                         } else {
                             self.del_iface(intf.if_name.clone()).await?;
                         }
-                        self.connector
-                            .global
-                            .remove_node_interface(node_uuid, intf_uuid)
-                            .await?;
+                        self.connector.local.remove_interface(intf_uuid).await?;
                         Ok(intf)
                     }
                 }
@@ -938,21 +862,13 @@ impl NetworkingPlugin for LinuxNetwork {
 
         self.create_bridge(v_iface.if_name.clone()).await?;
 
-        self.connector
-            .global
-            .add_node_interface(node_uuid, &v_iface)
-            .await?;
+        self.connector.local.add_interface(&v_iface).await?;
         Ok(v_iface)
     }
 
     async fn get_virtual_bridge(&self, br_uuid: Uuid) -> FResult<VirtualInterface> {
         let node_uuid = self.agent.as_ref().unwrap().get_node_uuid().await??;
-        match self
-            .connector
-            .global
-            .get_node_interface(node_uuid, br_uuid)
-            .await
-        {
+        match self.connector.local.get_interface(br_uuid).await {
             Err(err) => Err(err),
             Ok(i) => match i.kind {
                 VirtualInterfaceKind::BRIDGE(_) => Ok(i),
@@ -963,37 +879,22 @@ impl NetworkingPlugin for LinuxNetwork {
 
     async fn delete_virtual_bridge(&self, br_uuid: Uuid) -> FResult<VirtualInterface> {
         let node_uuid = self.agent.as_ref().unwrap().get_node_uuid().await??;
-        match self
-            .connector
-            .global
-            .get_node_interface(node_uuid, br_uuid)
-            .await
-        {
+        match self.connector.local.get_interface(br_uuid).await {
             Err(err) => Err(err),
             Ok(i) => match i.net_ns {
                 Some(ns_uuid) => {
-                    let netns = self
-                        .connector
-                        .global
-                        .get_node_network_namespace(node_uuid, ns_uuid)
-                        .await?;
+                    let netns = self.connector.local.get_network_namespace(ns_uuid).await?;
                     let ns_manager = self.get_ns_manager(&ns_uuid).await?;
                     ns_manager
                         .del_virtual_interface(i.if_name.clone())
                         .await??;
-                    self.connector
-                        .global
-                        .remove_node_interface(node_uuid, br_uuid)
-                        .await?;
+                    self.connector.local.remove_interface(br_uuid).await?;
                     Ok(i)
                 }
                 None => match i.kind {
                     VirtualInterfaceKind::BRIDGE(_) => {
                         self.del_iface(i.if_name.clone()).await?;
-                        self.connector
-                            .global
-                            .remove_node_interface(node_uuid, br_uuid)
-                            .await?;
+                        self.connector.local.remove_interface(br_uuid).await?;
                         Ok(i)
                     }
                     _ => Err(FError::WrongKind),
@@ -1021,37 +922,26 @@ impl NetworkingPlugin for LinuxNetwork {
             .set_virtual_interface_up("lo".to_string())
             .await??;
 
-        self.connector
-            .global
-            .add_node_network_namespace(node_uuid, &netns)
-            .await?;
+        self.connector.local.add_network_namespace(&netns).await?;
         Ok(netns)
     }
 
     async fn get_network_namespace(&self, ns_uuid: Uuid) -> FResult<NetworkNamespace> {
         let node_uuid = self.agent.as_ref().unwrap().get_node_uuid().await??;
-        self.connector
-            .global
-            .get_node_network_namespace(node_uuid, ns_uuid)
-            .await
+        self.connector.local.get_network_namespace(ns_uuid).await
     }
 
     async fn delete_network_namespace(&self, ns_uuid: Uuid) -> FResult<NetworkNamespace> {
         let node_uuid = self.agent.as_ref().unwrap().get_node_uuid().await??;
-        match self
-            .connector
-            .global
-            .get_node_network_namespace(node_uuid, ns_uuid)
-            .await
-        {
+        match self.connector.local.get_network_namespace(ns_uuid).await {
             Err(_) => Err(FError::NotFound),
             Ok(netns) => {
                 self.del_netns(netns.ns_name.clone()).await?;
                 log::trace!("Taking guard to remove ns-manager");
                 self.kill_ns_manager(&netns.uuid).await?;
                 self.connector
-                    .global
-                    .remove_node_network_namespace(node_uuid, ns_uuid)
+                    .local
+                    .remove_network_namespace(ns_uuid)
                     .await?;
                 Ok(netns)
             }
@@ -1064,22 +954,14 @@ impl NetworkingPlugin for LinuxNetwork {
         cp_uuid: Uuid,
     ) -> FResult<VirtualInterface> {
         let node_uuid = self.agent.as_ref().unwrap().get_node_uuid().await??;
-        let cp = self
-            .connector
-            .global
-            .get_node_connection_point(node_uuid, cp_uuid)
-            .await?;
-        let mut iface = self
-            .connector
-            .global
-            .get_node_interface(node_uuid, intf_uuid)
-            .await?;
+        let cp = self.connector.local.get_connection_point(cp_uuid).await?;
+        let mut iface = self.connector.local.get_interface(intf_uuid).await?;
 
         Err(FError::Unimplemented)
         // iface.net_ns = Some(cp.net_ns);
         // self.connector
-        //     .global
-        //     .add_node_interface(node_uuid, &iface)
+        //     .local
+        //     .add_interface(&iface)
         //     .await?;
         // Ok(iface)
     }
@@ -1090,16 +972,8 @@ impl NetworkingPlugin for LinuxNetwork {
         cp_uuid: Uuid,
     ) -> FResult<VirtualInterface> {
         let node_uuid = self.agent.as_ref().unwrap().get_node_uuid().await??;
-        let cp = self
-            .connector
-            .global
-            .get_node_connection_point(node_uuid, cp_uuid)
-            .await?;
-        let mut iface = self
-            .connector
-            .global
-            .get_node_interface(node_uuid, intf_uuid)
-            .await?;
+        let cp = self.connector.local.get_connection_point(cp_uuid).await?;
+        let mut iface = self.connector.local.get_interface(intf_uuid).await?;
 
         Err(FError::Unimplemented)
 
@@ -1108,8 +982,8 @@ impl NetworkingPlugin for LinuxNetwork {
         //         if ns == cp.net_ns {
         //             iface.net_ns = None;
         //             self.connector
-        //                 .global
-        //                 .add_node_interface(node_uuid, &iface)
+        //                 .loccal
+        //                 .add_interface(&iface)
         //                 .await?;
         //             return Ok(iface);
         //         }
@@ -1125,21 +999,13 @@ impl NetworkingPlugin for LinuxNetwork {
         vnet_uuid: Uuid,
     ) -> FResult<ConnectionPoint> {
         let node_uuid = self.agent.as_ref().unwrap().get_node_uuid().await??;
-        let cp = self
-            .connector
-            .global
-            .get_node_connection_point(node_uuid, cp_uuid)
-            .await?;
-        let mut vnet = self
-            .connector
-            .global
-            .get_node_virtual_network(node_uuid, vnet_uuid)
-            .await?;
+        let cp = self.connector.local.get_connection_point(cp_uuid).await?;
+        let mut vnet = self.connector.local.get_virtual_network(vnet_uuid).await?;
         Err(FError::Unimplemented)
         // vnet.connection_points.push(cp.uuid);
         // self.connector
-        //     .global
-        //     .add_node_virutal_network(node_uuid, &vnet)
+        //     .local
+        //     .add_virutal_network(&vnet)
         //     .await?;
         // Ok(cp)
     }
@@ -1150,23 +1016,15 @@ impl NetworkingPlugin for LinuxNetwork {
         vnet_uuid: Uuid,
     ) -> FResult<ConnectionPoint> {
         let node_uuid = self.agent.as_ref().unwrap().get_node_uuid().await??;
-        let cp = self
-            .connector
-            .global
-            .get_node_connection_point(node_uuid, cp_uuid)
-            .await?;
-        let mut vnet = self
-            .connector
-            .global
-            .get_node_virtual_network(node_uuid, vnet_uuid)
-            .await?;
+        let cp = self.connector.local.get_connection_point(cp_uuid).await?;
+        let mut vnet = self.connector.local.get_virtual_network(vnet_uuid).await?;
         Err(FError::Unimplemented)
         // match vnet.connection_points.iter().position(|&x| x == cp.uuid) {
         //     Some(p) => {
         //         vnet.connection_points.remove(p);
         //         self.connector
-        //             .global
-        //             .add_node_virutal_network(node_uuid, &vnet)
+        //             .local
+        //             .add_virutal_network(&vnet)
         //             .await?;
         //         Ok(cp)
         //     }
@@ -1176,11 +1034,7 @@ impl NetworkingPlugin for LinuxNetwork {
 
     async fn get_interface_addresses(&self, intf_uuid: Uuid) -> FResult<Vec<IPAddress>> {
         let node_uuid = self.agent.as_ref().unwrap().get_node_uuid().await??;
-        let iface = self
-            .connector
-            .global
-            .get_node_interface(node_uuid, intf_uuid)
-            .await?;
+        let iface = self.connector.local.get_interface(intf_uuid).await?;
         Ok(iface.addresses)
     }
 
@@ -1211,45 +1065,30 @@ impl NetworkingPlugin for LinuxNetwork {
         };
         Err(FError::Unimplemented)
         // self.connector
-        //     .global
-        //     .add_node_interface(node_uuid, &v_iface)
+        //     .local
+        //     .add_interface(&v_iface)
         //     .await?;
         // Ok(v_iface)
     }
 
     async fn delete_macvan_interface(&self, intf_uuid: Uuid) -> FResult<VirtualInterface> {
         let node_uuid = self.agent.as_ref().unwrap().get_node_uuid().await??;
-        match self
-            .connector
-            .global
-            .get_node_interface(node_uuid, intf_uuid)
-            .await
-        {
+        match self.connector.local.get_interface(intf_uuid).await {
             Err(err) => Err(err),
             Ok(i) => match i.net_ns {
                 Some(ns_uuid) => {
-                    let netns = self
-                        .connector
-                        .global
-                        .get_node_network_namespace(node_uuid, ns_uuid)
-                        .await?;
+                    let netns = self.connector.local.get_network_namespace(ns_uuid).await?;
                     let ns_manager = self.get_ns_manager(&ns_uuid).await?;
                     ns_manager
                         .del_virtual_interface(i.if_name.clone())
                         .await??;
-                    self.connector
-                        .global
-                        .remove_node_interface(node_uuid, intf_uuid)
-                        .await?;
+                    self.connector.local.remove_interface(intf_uuid).await?;
                     Ok(i)
                 }
                 None => match i.kind {
                     VirtualInterfaceKind::MACVLAN(_) => {
                         self.del_iface(i.if_name.clone()).await?;
-                        self.connector
-                            .global
-                            .remove_node_interface(node_uuid, intf_uuid)
-                            .await?;
+                        self.connector.local.remove_interface(intf_uuid).await?;
                         Ok(i)
                     }
                     _ => Err(FError::WrongKind),
@@ -1264,24 +1103,16 @@ impl NetworkingPlugin for LinuxNetwork {
         ns_uuid: Uuid,
     ) -> FResult<VirtualInterface> {
         let node_uuid = self.agent.as_ref().unwrap().get_node_uuid().await??;
-        let mut iface = self
-            .connector
-            .global
-            .get_node_interface(node_uuid, intf_uuid)
-            .await?;
+        let mut iface = self.connector.local.get_interface(intf_uuid).await?;
 
         match iface.net_ns {
             Some(old_ns_uuid) => {
                 let mut netns = self
                     .connector
-                    .global
-                    .get_node_network_namespace(node_uuid, old_ns_uuid)
+                    .local
+                    .get_network_namespace(old_ns_uuid)
                     .await?;
-                let mut newns = self
-                    .connector
-                    .global
-                    .get_node_network_namespace(node_uuid, ns_uuid)
-                    .await?;
+                let mut newns = self.connector.local.get_network_namespace(ns_uuid).await?;
 
                 match netns.interfaces.iter().position(|&x| x == intf_uuid) {
                     Some(p) => {
@@ -1297,25 +1128,15 @@ impl NetworkingPlugin for LinuxNetwork {
                         iface.net_ns = Some(newns.uuid);
                         newns.interfaces.push(iface.uuid);
 
-                        self.connector
-                            .global
-                            .add_node_interface(node_uuid, &iface)
-                            .await?;
-                        self.connector
-                            .global
-                            .add_node_network_namespace(node_uuid, &netns)
-                            .await?;
+                        self.connector.local.add_interface(&iface).await?;
+                        self.connector.local.add_network_namespace(&netns).await?;
                         Ok(iface)
                     }
                     None => Err(FError::NotConnected),
                 }
             }
             None => {
-                let mut netns = self
-                    .connector
-                    .global
-                    .get_node_network_namespace(node_uuid, ns_uuid)
-                    .await?;
+                let mut netns = self.connector.local.get_network_namespace(ns_uuid).await?;
 
                 self.set_iface_ns(iface.if_name.clone(), netns.ns_name.clone())
                     .await?;
@@ -1323,14 +1144,8 @@ impl NetworkingPlugin for LinuxNetwork {
                 iface.net_ns = Some(netns.uuid);
                 netns.interfaces.push(iface.uuid);
 
-                self.connector
-                    .global
-                    .add_node_interface(node_uuid, &iface)
-                    .await?;
-                self.connector
-                    .global
-                    .add_node_network_namespace(node_uuid, &netns)
-                    .await?;
+                self.connector.local.add_interface(&iface).await?;
+                self.connector.local.add_network_namespace(&netns).await?;
                 Ok(iface)
             }
         }
@@ -1341,34 +1156,24 @@ impl NetworkingPlugin for LinuxNetwork {
         intf_uuid: Uuid,
     ) -> FResult<VirtualInterface> {
         let node_uuid = self.agent.as_ref().unwrap().get_node_uuid().await??;
-        let mut iface = self
-            .connector
-            .global
-            .get_node_interface(node_uuid, intf_uuid)
-            .await?;
+        let mut iface = self.connector.local.get_interface(intf_uuid).await?;
         match iface.net_ns {
             Some(netns_uuid) => {
                 let mut netns = self
                     .connector
-                    .global
-                    .get_node_network_namespace(node_uuid, netns_uuid)
+                    .local
+                    .get_network_namespace(netns_uuid)
                     .await?;
                 let ns_manager = self.get_ns_manager(&netns_uuid).await?;
                 ns_manager
                     .move_virtual_interface_into_default_ns(iface.if_name.clone())
                     .await??;
                 iface.net_ns = None;
-                self.connector
-                    .global
-                    .add_node_interface(node_uuid, &iface)
-                    .await?;
+                self.connector.local.add_interface(&iface).await?;
                 match netns.interfaces.iter().position(|&x| x == iface.uuid) {
                     Some(p) => {
                         netns.interfaces.remove(p);
-                        self.connector
-                            .global
-                            .add_node_network_namespace(node_uuid, &netns)
-                            .await?;
+                        self.connector.local.add_network_namespace(&netns).await?;
                         Ok(iface)
                     }
                     None => Err(FError::NotConnected),
@@ -1384,37 +1189,23 @@ impl NetworkingPlugin for LinuxNetwork {
         intf_name: String,
     ) -> FResult<VirtualInterface> {
         let node_uuid = self.agent.as_ref().unwrap().get_node_uuid().await??;
-        let mut iface = self
-            .connector
-            .global
-            .get_node_interface(node_uuid, intf_uuid)
-            .await?;
+        let mut iface = self.connector.local.get_interface(intf_uuid).await?;
         match iface.net_ns {
             Some(ns_uuid) => {
-                let netns = self
-                    .connector
-                    .global
-                    .get_node_network_namespace(node_uuid, ns_uuid)
-                    .await?;
+                let netns = self.connector.local.get_network_namespace(ns_uuid).await?;
                 let ns_manager = self.get_ns_manager(&ns_uuid).await?;
                 ns_manager
                     .set_virtual_interface_name(iface.if_name.clone(), intf_name.clone())
                     .await??;
                 iface.if_name = intf_name;
-                self.connector
-                    .global
-                    .add_node_interface(node_uuid, &iface)
-                    .await?;
+                self.connector.local.add_interface(&iface).await?;
                 Ok(iface)
             }
             None => {
                 self.set_iface_name(iface.if_name.clone(), intf_name.clone())
                     .await?;
                 iface.if_name = intf_name;
-                self.connector
-                    .global
-                    .add_node_interface(node_uuid, &iface)
-                    .await?;
+                self.connector.local.add_interface(&iface).await?;
                 Ok(iface)
             }
         }
@@ -1426,24 +1217,12 @@ impl NetworkingPlugin for LinuxNetwork {
         br_uuid: Uuid,
     ) -> FResult<VirtualInterface> {
         let node_uuid = self.agent.as_ref().unwrap().get_node_uuid().await??;
-        let mut iface = self
-            .connector
-            .global
-            .get_node_interface(node_uuid, intf_uuid)
-            .await?;
-        let bridge = self
-            .connector
-            .global
-            .get_node_interface(node_uuid, br_uuid)
-            .await?;
+        let mut iface = self.connector.local.get_interface(intf_uuid).await?;
+        let bridge = self.connector.local.get_interface(br_uuid).await?;
         match bridge.kind {
             VirtualInterfaceKind::BRIDGE(mut info) => match (iface.net_ns, bridge.net_ns) {
                 (Some(ns_uuid), Some(_)) => {
-                    let netns = self
-                        .connector
-                        .global
-                        .get_node_network_namespace(node_uuid, ns_uuid)
-                        .await?;
+                    let netns = self.connector.local.get_network_namespace(ns_uuid).await?;
                     let ns_manager = self.get_ns_manager(&ns_uuid).await?;
                     ns_manager
                         .set_virtual_interface_master(iface.if_name.clone(), bridge.if_name.clone())
@@ -1456,20 +1235,10 @@ impl NetworkingPlugin for LinuxNetwork {
                         .set_virtual_interface_up(iface.if_name.clone())
                         .await??;
 
-                    let mut new_bridge = self
-                        .connector
-                        .global
-                        .get_node_interface(node_uuid, br_uuid)
-                        .await?;
+                    let mut new_bridge = self.connector.local.get_interface(br_uuid).await?;
                     new_bridge.kind = VirtualInterfaceKind::BRIDGE(info);
-                    self.connector
-                        .global
-                        .add_node_interface(node_uuid, &iface)
-                        .await?;
-                    self.connector
-                        .global
-                        .add_node_interface(node_uuid, &new_bridge)
-                        .await?;
+                    self.connector.local.add_interface(&iface).await?;
+                    self.connector.local.add_interface(&new_bridge).await?;
                     Ok(iface)
                 }
                 (Some(_), None) | (None, Some(_)) => Err(FError::NetworkingError(String::from(
@@ -1484,20 +1253,10 @@ impl NetworkingPlugin for LinuxNetwork {
 
                     self.set_iface_up(iface.if_name.clone()).await?;
 
-                    let mut new_bridge = self
-                        .connector
-                        .global
-                        .get_node_interface(node_uuid, br_uuid)
-                        .await?;
+                    let mut new_bridge = self.connector.local.get_interface(br_uuid).await?;
                     new_bridge.kind = VirtualInterfaceKind::BRIDGE(info);
-                    self.connector
-                        .global
-                        .add_node_interface(node_uuid, &iface)
-                        .await?;
-                    self.connector
-                        .global
-                        .add_node_interface(node_uuid, &new_bridge)
-                        .await?;
+                    self.connector.local.add_interface(&iface).await?;
+                    self.connector.local.add_interface(&new_bridge).await?;
                     Ok(iface)
                 }
             },
@@ -1507,19 +1266,11 @@ impl NetworkingPlugin for LinuxNetwork {
 
     async fn detach_interface_from_bridge(&self, intf_uuid: Uuid) -> FResult<VirtualInterface> {
         let node_uuid = self.agent.as_ref().unwrap().get_node_uuid().await??;
-        let mut iface = self
-            .connector
-            .global
-            .get_node_interface(node_uuid, intf_uuid)
-            .await?;
+        let mut iface = self.connector.local.get_interface(intf_uuid).await?;
         match iface.parent {
             None => Err(FError::NotConnected),
             Some(br_uuid) => {
-                let bridge = self
-                    .connector
-                    .global
-                    .get_node_interface(node_uuid, br_uuid)
-                    .await?;
+                let bridge = self.connector.local.get_interface(br_uuid).await?;
                 match bridge.kind {
                     VirtualInterfaceKind::BRIDGE(mut info) => match iface.net_ns {
                         Some(ns_uuid) => {
@@ -1530,23 +1281,14 @@ impl NetworkingPlugin for LinuxNetwork {
                             match info.childs.iter().position(|&x| x == iface.uuid) {
                                 Some(p) => {
                                     info.childs.remove(p);
-                                    let mut new_bridge = self
-                                        .connector
-                                        .global
-                                        .get_node_interface(node_uuid, br_uuid)
-                                        .await?;
+                                    let mut new_bridge =
+                                        self.connector.local.get_interface(br_uuid).await?;
                                     ns_manager
                                         .set_virtual_interface_nomaster(iface.if_name.clone())
                                         .await??;
                                     new_bridge.kind = VirtualInterfaceKind::BRIDGE(info);
-                                    self.connector
-                                        .global
-                                        .add_node_interface(node_uuid, &new_bridge)
-                                        .await?;
-                                    self.connector
-                                        .global
-                                        .add_node_interface(node_uuid, &iface)
-                                        .await?;
+                                    self.connector.local.add_interface(&new_bridge).await?;
+                                    self.connector.local.add_interface(&iface).await?;
                                     return Ok(iface);
                                 }
                                 None => return Err(FError::NotConnected),
@@ -1555,21 +1297,12 @@ impl NetworkingPlugin for LinuxNetwork {
                         None => match info.childs.iter().position(|&x| x == iface.uuid) {
                             Some(p) => {
                                 info.childs.remove(p);
-                                let mut new_bridge = self
-                                    .connector
-                                    .global
-                                    .get_node_interface(node_uuid, br_uuid)
-                                    .await?;
+                                let mut new_bridge =
+                                    self.connector.local.get_interface(br_uuid).await?;
                                 self.del_iface_master(iface.if_name.clone()).await?;
                                 new_bridge.kind = VirtualInterfaceKind::BRIDGE(info);
-                                self.connector
-                                    .global
-                                    .add_node_interface(node_uuid, &new_bridge)
-                                    .await?;
-                                self.connector
-                                    .global
-                                    .add_node_interface(node_uuid, &iface)
-                                    .await?;
+                                self.connector.local.add_interface(&new_bridge).await?;
+                                self.connector.local.add_interface(&iface).await?;
                                 return Ok(iface);
                             }
                             None => return Err(FError::NotConnected),
@@ -1622,11 +1355,7 @@ impl NetworkingPlugin for LinuxNetwork {
         ns_uuid: Uuid,
     ) -> FResult<VirtualInterface> {
         let node_uuid = self.agent.as_ref().unwrap().get_node_uuid().await??;
-        let mut netns = self
-            .connector
-            .global
-            .get_node_network_namespace(node_uuid, ns_uuid)
-            .await?;
+        let mut netns = self.connector.local.get_network_namespace(ns_uuid).await?;
         //Err(FError::Unimplemented)
         match intf.kind {
             VirtualInterfaceConfigKind::VXLAN(conf) => {
@@ -1646,12 +1375,12 @@ impl NetworkingPlugin for LinuxNetwork {
                 // };
                 // netns.interfaces.push(v_iface.uuid);
                 // self.connector
-                //     .global
-                //     .add_node_network_namespace(node_uuid, &netns)
+                //     .local
+                //     .add_network_namespace(&netns)
                 //     .await?;
                 // self.connector
-                //     .global
-                //     .add_node_interface(node_uuid, &v_iface)
+                //     .local
+                //     .add_interface(&v_iface)
                 //     .await?;
                 // Ok(v_iface)
                 Err(FError::Unimplemented)
@@ -1668,12 +1397,12 @@ impl NetworkingPlugin for LinuxNetwork {
                 // };
                 // netns.interfaces.push(v_iface.uuid);
                 // self.connector
-                //     .global
-                //     .add_node_network_namespace(node_uuid, &netns)
+                //     .local
+                //     .add_network_namespace(&netns)
                 //     .await?;
                 // self.connector
-                //     .global
-                //     .add_node_interface(node_uuid, &v_iface)
+                //     .local
+                //     .add_interface(&v_iface)
                 //     .await?;
                 // Ok(v_iface)
                 Err(FError::Unimplemented)
@@ -1717,17 +1446,14 @@ impl NetworkingPlugin for LinuxNetwork {
 
                 netns.interfaces.push(internal_iface_uuid);
                 netns.interfaces.push(external_iface_uuid);
+                self.connector.local.add_network_namespace(&netns).await?;
                 self.connector
-                    .global
-                    .add_node_network_namespace(node_uuid, &netns)
+                    .local
+                    .add_interface(&v_iface_internal)
                     .await?;
                 self.connector
-                    .global
-                    .add_node_interface(node_uuid, &v_iface_internal)
-                    .await?;
-                self.connector
-                    .global
-                    .add_node_interface(node_uuid, &v_iface_external)
+                    .local
+                    .add_interface(&v_iface_external)
                     .await?;
                 Ok(v_iface_internal)
             }
@@ -1746,12 +1472,12 @@ impl NetworkingPlugin for LinuxNetwork {
                 // };
                 // netns.interfaces.push(v_iface.uuid);
                 // self.connector
-                //     .global
-                //     .add_node_network_namespace(node_uuid, &netns)
+                //     .local
+                //     .add_network_namespace(&netns)
                 //     .await?;
                 // self.connector
-                //     .global
-                //     .add_node_interface(node_uuid, &v_iface)
+                //     .local
+                //     .add_interface(&v_iface)
                 //     .await?;
                 // Ok(v_iface)
                 Err(FError::Unimplemented)
@@ -1770,12 +1496,12 @@ impl NetworkingPlugin for LinuxNetwork {
                 // };
                 // netns.interfaces.push(v_iface.uuid);
                 // self.connector
-                //     .global
-                //     .add_node_network_namespace(node_uuid, &netns)
+                //     .local
+                //     .add_network_namespace(&netns)
                 //     .await?;
                 // self.connector
-                //     .global
-                //     .add_node_interface(node_uuid, &v_iface)
+                //     .local
+                //     .add_interface(&v_iface)
                 //     .await?;
                 // Ok(v_iface)
                 Err(FError::Unimplemented)
@@ -1797,12 +1523,12 @@ impl NetworkingPlugin for LinuxNetwork {
                 // };
                 // netns.interfaces.push(v_iface.uuid);
                 // self.connector
-                //     .global
-                //     .add_node_network_namespace(node_uuid, &netns)
+                //     .local
+                //     .add_network_namespace(&netns)
                 //     .await?;
                 // self.connector
-                //     .global
-                //     .add_node_interface(node_uuid, &v_iface)
+                //     .local
+                //     .add_interface(&v_iface)
                 //     .await?;
                 // Ok(v_iface)
             }
@@ -1823,12 +1549,12 @@ impl NetworkingPlugin for LinuxNetwork {
                 // };
                 // netns.interfaces.push(v_iface.uuid);
                 // self.connector
-                //     .global
-                //     .add_node_network_namespace(node_uuid, &netns)
+                //     .local
+                //     .add_network_namespace(&netns)
                 //     .await?;
                 // self.connector
-                //     .global
-                //     .add_node_interface(node_uuid, &v_iface)
+                //     .local
+                //     .add_interface(&v_iface)
                 //     .await?;
                 // Ok(v_iface)
             }
@@ -1849,12 +1575,12 @@ impl NetworkingPlugin for LinuxNetwork {
                 // };
                 // netns.interfaces.push(v_iface.uuid);
                 // self.connector
-                //     .global
-                //     .add_node_network_namespace(node_uuid, &netns)
+                //     .local
+                //     .add_network_namespace(&netns)
                 //     .await?;
                 // self.connector
-                //     .global
-                //     .add_node_interface(node_uuid, &v_iface)
+                //     .local
+                //     .add_interface(&v_iface)
                 //     .await?;
                 // Ok(v_iface)
             }
@@ -1875,12 +1601,12 @@ impl NetworkingPlugin for LinuxNetwork {
                 // };
                 // netns.interfaces.push(v_iface.uuid);
                 // self.connector
-                //     .global
-                //     .add_node_network_namespace(node_uuid, &netns)
+                //     .local
+                //     .add_network_namespace(&netns)
                 //     .await?;
                 // self.connector
-                //     .global
-                //     .add_node_interface(node_uuid, &v_iface)
+                //     .local
+                //     .add_interface(&v_iface)
                 //     .await?;
                 // Ok(v_iface)
             }
@@ -1893,16 +1619,8 @@ impl NetworkingPlugin for LinuxNetwork {
         ns_uuid: Uuid,
     ) -> FResult<VirtualInterface> {
         let node_uuid = self.agent.as_ref().unwrap().get_node_uuid().await??;
-        let mut netns = self
-            .connector
-            .global
-            .get_node_network_namespace(node_uuid, ns_uuid)
-            .await?;
-        let iface = self
-            .connector
-            .global
-            .get_node_interface(node_uuid, intf_uuid)
-            .await?;
+        let mut netns = self.connector.local.get_network_namespace(ns_uuid).await?;
+        let iface = self.connector.local.get_interface(intf_uuid).await?;
         match iface.net_ns {
             None => Err(FError::NotConnected),
             Some(nid) => {
@@ -1916,19 +1634,10 @@ impl NetworkingPlugin for LinuxNetwork {
                         Some(p) => {
                             netns.interfaces.remove(p);
                             if let VirtualInterfaceKind::VETH(ref info) = iface.kind {
-                                self.connector
-                                    .global
-                                    .remove_node_interface(node_uuid, info.pair)
-                                    .await?;
+                                self.connector.local.remove_interface(info.pair).await?;
                             }
-                            self.connector
-                                .global
-                                .add_node_network_namespace(node_uuid, &netns)
-                                .await?;
-                            self.connector
-                                .global
-                                .remove_node_interface(node_uuid, intf_uuid)
-                                .await?;
+                            self.connector.local.add_network_namespace(&netns).await?;
+                            self.connector.local.remove_interface(intf_uuid).await?;
                             return Ok(iface);
                         }
                         None => return Err(FError::NotConnected),
@@ -1946,27 +1655,16 @@ impl NetworkingPlugin for LinuxNetwork {
     ) -> FResult<VirtualInterface> {
         log::trace!("assing_address_to_interface {} {:?}", intf_uuid, address);
         let node_uuid = self.agent.as_ref().unwrap().get_node_uuid().await??;
-        let mut iface = self
-            .connector
-            .global
-            .get_node_interface(node_uuid, intf_uuid)
-            .await?;
+        let mut iface = self.connector.local.get_interface(intf_uuid).await?;
         match iface.net_ns {
             Some(ns_uuid) => {
-                let netns = self
-                    .connector
-                    .global
-                    .get_node_network_namespace(node_uuid, ns_uuid)
-                    .await?;
+                let netns = self.connector.local.get_network_namespace(ns_uuid).await?;
                 let ns_manager = self.get_ns_manager(&ns_uuid).await?;
                 let addresses = ns_manager
                     .add_virtual_interface_address(iface.if_name.clone(), address)
                     .await??;
                 iface.addresses = addresses;
-                self.connector
-                    .global
-                    .add_node_interface(node_uuid, &iface)
-                    .await?;
+                self.connector.local.add_interface(&iface).await?;
                 Ok(iface)
             }
             None => match address {
@@ -1974,10 +1672,7 @@ impl NetworkingPlugin for LinuxNetwork {
                     self.add_iface_address(iface.if_name.clone(), address.ip(), address.prefix())
                         .await?;
                     iface.addresses.push(address.ip());
-                    self.connector
-                        .global
-                        .add_node_interface(node_uuid, &iface)
-                        .await?;
+                    self.connector.local.add_interface(&iface).await?;
                     Ok(iface)
                 }
                 None => {
@@ -1993,10 +1688,7 @@ impl NetworkingPlugin for LinuxNetwork {
                         .map_err(|e| FError::NetworkingError(format!("{}", e)))?;
                     let addresses = self.get_iface_addresses(iface.if_name.clone()).await?;
                     iface.addresses = addresses;
-                    self.connector
-                        .global
-                        .add_node_interface(node_uuid, &iface)
-                        .await?;
+                    self.connector.local.add_interface(&iface).await?;
                     Ok(iface)
                 }
             },
@@ -2009,28 +1701,17 @@ impl NetworkingPlugin for LinuxNetwork {
         address: IPAddress,
     ) -> FResult<VirtualInterface> {
         let node_uuid = self.agent.as_ref().unwrap().get_node_uuid().await??;
-        let mut iface = self
-            .connector
-            .global
-            .get_node_interface(node_uuid, intf_uuid)
-            .await?;
+        let mut iface = self.connector.local.get_interface(intf_uuid).await?;
         match iface.net_ns {
             Some(ns_uuid) => match iface.addresses.iter().position(|&x| x == address) {
                 Some(p) => {
-                    let netns = self
-                        .connector
-                        .global
-                        .get_node_network_namespace(node_uuid, ns_uuid)
-                        .await?;
+                    let netns = self.connector.local.get_network_namespace(ns_uuid).await?;
                     let ns_manager = self.get_ns_manager(&ns_uuid).await?;
                     let addresses = ns_manager
                         .del_virtual_interface_address(iface.if_name.clone(), address)
                         .await??;
                     iface.addresses.remove(p);
-                    self.connector
-                        .global
-                        .add_node_interface(node_uuid, &iface)
-                        .await?;
+                    self.connector.local.add_interface(&iface).await?;
                     Ok(iface)
                 }
                 None => Err(FError::NotConnected),
@@ -2040,10 +1721,7 @@ impl NetworkingPlugin for LinuxNetwork {
                     self.del_iface_address(iface.if_name.clone(), address)
                         .await?;
                     iface.addresses.remove(p);
-                    self.connector
-                        .global
-                        .add_node_interface(node_uuid, &iface)
-                        .await?;
+                    self.connector.local.add_interface(&iface).await?;
                     Ok(iface)
                 }
                 None => Err(FError::NotConnected),
@@ -2057,40 +1735,26 @@ impl NetworkingPlugin for LinuxNetwork {
         address: MACAddress,
     ) -> FResult<VirtualInterface> {
         let node_uuid = self.agent.as_ref().unwrap().get_node_uuid().await??;
-        let mut iface = self
-            .connector
-            .global
-            .get_node_interface(node_uuid, intf_uuid)
-            .await?;
+        let mut iface = self.connector.local.get_interface(intf_uuid).await?;
 
         let vec_addr = vec![
             address.0, address.1, address.2, address.3, address.4, address.5,
         ];
         match iface.net_ns {
             Some(ns_uuid) => {
-                let netns = self
-                    .connector
-                    .global
-                    .get_node_network_namespace(node_uuid, ns_uuid)
-                    .await?;
+                let netns = self.connector.local.get_network_namespace(ns_uuid).await?;
                 let ns_manager = self.get_ns_manager(&ns_uuid).await?;
                 ns_manager
                     .set_virtual_interface_mac(iface.if_name.clone(), vec_addr)
                     .await??;
                 iface.phy_address = address;
-                self.connector
-                    .global
-                    .add_node_interface(node_uuid, &iface)
-                    .await?;
+                self.connector.local.add_interface(&iface).await?;
                 Ok(iface)
             }
             None => {
                 self.set_iface_mac(iface.if_name.clone(), vec_addr).await?;
                 iface.phy_address = address;
-                self.connector
-                    .global
-                    .add_node_interface(node_uuid, &iface)
-                    .await?;
+                self.connector.local.add_interface(&iface).await?;
                 Ok(iface)
             }
         }
@@ -2225,23 +1889,16 @@ impl LinuxNetwork {
         let node_uuid = self.agent.as_ref().unwrap().get_node_uuid().await??;
         let default_vnet = self
             .connector
-            .global
-            .get_node_virtual_network(node_uuid, Uuid::nil())
+            .local
+            .get_virtual_network(Uuid::nil())
             .await?;
 
         for iface_uuid in default_vnet.interfaces {
-            let iface = self
-                .connector
-                .global
-                .get_node_interface(node_uuid, iface_uuid)
-                .await?;
+            let iface = self.connector.local.get_interface(iface_uuid).await?;
             match iface.net_ns {
                 None => {
                     self.del_iface(iface.if_name.clone()).await?;
-                    self.connector
-                        .global
-                        .remove_node_interface(node_uuid, iface_uuid)
-                        .await?;
+                    self.connector.local.remove_interface(iface_uuid).await?;
                 }
                 Some(_) => continue,
             }
@@ -2253,8 +1910,8 @@ impl LinuxNetwork {
             // Removing namespace if present
             if let Some(ns_internals) = internals.associated_netns {
                 self.connector
-                    .global
-                    .get_node_network_namespace(node_uuid, ns_internals.ns_uuid)
+                    .local
+                    .get_network_namespace(ns_internals.ns_uuid)
                     .await?;
 
                 self.del_netns(ns_internals.ns_name).await?;
@@ -2262,8 +1919,8 @@ impl LinuxNetwork {
                 log::trace!("Taking guard to remove ns-manager");
                 self.kill_ns_manager(&ns_internals.ns_uuid).await?;
                 self.connector
-                    .global
-                    .remove_node_network_namespace(node_uuid, ns_internals.ns_uuid)
+                    .local
+                    .remove_network_namespace(ns_internals.ns_uuid)
                     .await?;
             }
 
@@ -2302,8 +1959,8 @@ impl LinuxNetwork {
         }
 
         self.connector
-            .global
-            .remove_node_virtual_network(node_uuid, Uuid::nil())
+            .local
+            .remove_virtual_network(Uuid::nil())
             .await?;
 
         // Here we should remove and kill all the others ns-managers and clean-up
@@ -2468,10 +2125,7 @@ impl LinuxNetwork {
         // Creating Virtual network bridge
 
         self.create_bridge(br_name.clone()).await?;
-        self.connector
-            .global
-            .add_node_interface(node_uuid, &v_bridge)
-            .await?;
+        self.connector.local.add_interface(&v_bridge).await?;
 
         vnet.interfaces.push(br_uuid);
 
@@ -2487,10 +2141,7 @@ impl LinuxNetwork {
             vxlan_info.port,
         )
         .await?;
-        self.connector
-            .global
-            .add_node_interface(node_uuid, &vxl_iface)
-            .await?;
+        self.connector.local.add_interface(&vxl_iface).await?;
 
         vnet.interfaces.push(vxl_uuid);
 
@@ -2504,25 +2155,19 @@ impl LinuxNetwork {
             .await?;
 
         self.connector
-            .global
-            .add_node_network_namespace(node_uuid, &associated_ns)
+            .local
+            .add_network_namespace(&associated_ns)
             .await?;
 
         // Creating veth pair
         self.create_veth(external_veth_name.clone(), internal_veth_name.clone())
             .await?;
 
-        self.connector
-            .global
-            .add_node_interface(node_uuid, &v_veth_e)
-            .await?;
+        self.connector.local.add_interface(&v_veth_e).await?;
 
         vnet.interfaces.push(internal_veth_uuid);
 
-        self.connector
-            .global
-            .add_node_interface(node_uuid, &v_veth_i)
-            .await?;
+        self.connector.local.add_interface(&v_veth_i).await?;
 
         vnet.interfaces.push(external_veth_uuid);
 
@@ -2557,8 +2202,8 @@ impl LinuxNetwork {
         vnet.interfaces.push(internal_br_uuid);
 
         self.connector
-            .global
-            .add_node_interface(node_uuid, &v_internal_bridge)
+            .local
+            .add_interface(&v_internal_bridge)
             .await?;
 
         ns_manager
