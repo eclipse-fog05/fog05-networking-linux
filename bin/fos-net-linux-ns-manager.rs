@@ -921,6 +921,37 @@ impl NSManager {
             Ok(ifaces)
         })
     }
+
+    async fn add_default_route(&self, iface: String) -> FResult<()> {
+        log::trace!("add_default_route({})", iface);
+        let mut state = self.state.write().await;
+        state.tokio_rt.block_on(async {
+            let mut links = state
+                .nl_handler
+                .link()
+                .get()
+                .set_name_filter(iface)
+                .execute();
+            if let Some(link) = links
+                .try_next()
+                .await
+                .map_err(|e| FError::NetworkingError(format!("{}", e)))?
+            {
+                state
+                    .nl_handler
+                    .route()
+                    .add()
+                    .v4()
+                    .destination_prefix(std::net::Ipv4Addr::new(0, 0, 0, 0), 0u8)
+                    .output_interface(link.header.index)
+                    .execute()
+                    .await
+                    .map_err(|e| FError::NetworkingError(format!("{}", e)))
+            } else {
+                Err(FError::NotFound)
+            }
+        })
+    }
 }
 
 #[znserver]
@@ -930,6 +961,9 @@ impl NamespaceManager for NSManager {
     }
     async fn set_virtual_interface_down(&self, iface: String) -> FResult<()> {
         self.set_iface_down(iface).await
+    }
+    async fn set_default_route(&self, iface: String) -> FResult<()> {
+        self.add_default_route(iface).await
     }
     async fn check_virtual_interface_exists(&self, iface: String) -> FResult<bool> {
         self.iface_exists(iface).await

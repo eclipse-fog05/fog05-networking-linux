@@ -121,6 +121,7 @@ pub fn deserialize_plugin_config(raw_data: &[u8]) -> FResult<LinuxNetworkConfig>
 pub trait NamespaceManager {
     async fn set_virtual_interface_up(&self, iface: String) -> FResult<()>;
     async fn set_virtual_interface_down(&self, iface: String) -> FResult<()>;
+    async fn set_default_route(&self, iface: String) -> FResult<()>;
     async fn check_virtual_interface_exists(&self, iface: String) -> FResult<bool>;
     async fn move_virtual_interface_into_default_ns(&self, iface: String) -> FResult<()>;
     async fn set_virtual_interface_mac(&self, iface: String, address: Vec<u8>) -> FResult<()>;

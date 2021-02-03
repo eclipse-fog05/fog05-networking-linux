@@ -903,6 +903,26 @@ impl NetworkingPlugin for LinuxNetwork {
         }
     }
 
+    async fn set_default_route_in_network_namespace(
+        &self,
+        ns_uuid: Uuid,
+        intf_uuid: Uuid,
+    ) -> FResult<()> {
+        let node_uuid = self.agent.as_ref().unwrap().get_node_uuid().await??;
+        let mut netns = self.connector.local.get_network_namespace(ns_uuid).await?;
+        let iface = self.connector.local.get_interface(intf_uuid).await?;
+        match iface.net_ns {
+            None => Err(FError::NotConnected),
+            Some(nid) => {
+                if nid == netns.uuid {
+                    let ns_manager = self.get_ns_manager(&ns_uuid).await?;
+                    return ns_manager.set_default_route(iface.if_name.clone()).await?;
+                }
+                Err(FError::NotConnected)
+            }
+        }
+    }
+
     async fn create_network_namespace(&self) -> FResult<NetworkNamespace> {
         let node_uuid = self.agent.as_ref().unwrap().get_node_uuid().await??;
         let ns_name = self.generate_random_netns_name();
