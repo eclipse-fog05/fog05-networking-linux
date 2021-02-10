@@ -75,7 +75,6 @@ struct NSManagerArgs {
 }
 
 pub struct NSManagerState {
-    pub tokio_rt: tokio::runtime::Runtime,
     pub nl_handler: rtnetlink::Handle,
 }
 
@@ -176,14 +175,12 @@ fn main() {
             async fn __main(args: NSManagerArgs) {
                 log::info!("Running on namespace {}", args.netns);
                 let my_pid = process::id();
-                log::trace!("Creating Tokio runtime");
-                let rt = tokio::runtime::Runtime::new().unwrap();
 
                 let properties = format!("mode=client;peer={}", args.locator.clone());
                 let zproperties = Properties::from(properties);
                 let zenoh = Arc::new(zenoh::net::open(zproperties.into()).await.unwrap());
 
-                let mut manager = match NSManager::new(zenoh, my_pid, args.id, rt).await {
+                let mut manager = match NSManager::new(zenoh, my_pid, args.id).await {
                     Ok(m) => m,
                     Err(e) => {
                         log::error!("Error when creating manager: {}", e);
@@ -244,26 +241,12 @@ fn main() {
 }
 
 impl NSManager {
-    pub async fn new(
-        z: Arc<zenoh::net::Session>,
-        pid: u32,
-        uuid: Uuid,
-        rt: tokio::runtime::Runtime,
-    ) -> FResult<Self> {
+    pub async fn new(z: Arc<zenoh::net::Session>, pid: u32, uuid: Uuid) -> FResult<Self> {
         // This will disappear once netlink merges async-std support
-        let handle = rt
-            .spawn_blocking(|| {
-                let (connection, handle, _) = new_connection().unwrap();
-                tokio::spawn(connection);
-                handle
-            })
-            .await
-            .map_err(|e| FError::NetworkingError(format!("{}", e)))?;
+        let (connection, handle, _) = new_connection().unwrap();
+        async_std::task::spawn(connection);
 
-        let state = NSManagerState {
-            tokio_rt: rt,
-            nl_handler: handle,
-        };
+        let state = NSManagerState { nl_handler: handle };
 
         Ok(Self {
             z,
@@ -321,60 +304,50 @@ impl NSManager {
     async fn create_bridge(&self, br_name: String) -> FResult<()> {
         log::trace!("create_bridge {}", br_name);
         let mut state = self.state.write().await;
+
         state
-            .tokio_rt
-            .block_on(async {
-                state
-                    .nl_handler
-                    .link()
-                    .add()
-                    .bridge(br_name)
-                    .execute()
-                    .await
-            })
+            .nl_handler
+            .link()
+            .add()
+            .bridge(br_name)
+            .execute()
+            .await
             .map_err(|e| FError::NetworkingError(format!("{}", e)))
     }
 
     async fn create_veth(&self, iface_i: String, iface_e: String) -> FResult<()> {
         let mut state = self.state.write().await;
+
         state
-            .tokio_rt
-            .block_on(async {
-                state
-                    .nl_handler
-                    .link()
-                    .add()
-                    .veth(iface_i, iface_e)
-                    .execute()
-                    .await
-            })
+            .nl_handler
+            .link()
+            .add()
+            .veth(iface_i, iface_e)
+            .execute()
+            .await
             .map_err(|e| FError::NetworkingError(format!("{}", e)))
     }
 
     async fn create_vlan(&self, iface: String, dev: String, tag: u16) -> FResult<()> {
         let mut state = self.state.write().await;
-        state
-            .tokio_rt
-            .block_on(async {
-                let mut links = state.nl_handler.link().get().set_name_filter(dev).execute();
-                if let Some(link) = links
-                    .try_next()
-                    .await
-                    .map_err(|e| FError::NetworkingError(format!("{}", e)))?
-                {
-                    state
-                        .nl_handler
-                        .link()
-                        .add()
-                        .vlan(iface, link.header.index, tag)
-                        .execute()
-                        .await
-                        .map_err(|e| FError::NetworkingError(format!("{}", e)))
-                } else {
-                    Err(FError::NotFound)
-                }
-            })
-            .map_err(|e| FError::NetworkingError(format!("{}", e)))
+
+        let mut links = state.nl_handler.link().get().set_name_filter(dev).execute();
+        if let Some(link) = links
+            .try_next()
+            .await
+            .map_err(|e| FError::NetworkingError(format!("{}", e)))?
+        {
+            state
+                .nl_handler
+                .link()
+                .add()
+                .vlan(iface, link.header.index, tag)
+                .execute()
+                .await
+                .map_err(|e| FError::NetworkingError(format!("{}", e)))
+        } else {
+            Err(FError::NotFound)
+        }
     }
 
     async fn create_mcast_vxlan(
@@ -394,37 +367,33 @@ impl NSManager {
             port
         );
         let mut state = self.state.write().await;
-        state
-            .tokio_rt
-            .block_on(async {
-                let mut links = state.nl_handler.link().get().set_name_filter(dev).execute();
-                if let Some(link) = links
-                    .try_next()
-                    .await
-                    .map_err(|e| FError::NetworkingError(format!("{}", e)))?
-                {
-                    let vxlan = state
-                        .nl_handler
-                        .link()
-                        .add()
-                        .vxlan(iface, vni)
-                        .link(link.header.index);
 
-                    let vxlan = match mcast_addr {
-                        IPAddress::V4(v4) => vxlan.group(v4),
-                        IPAddress::V6(v6) => vxlan.group6(v6),
-                    };
+        let mut links = state.nl_handler.link().get().set_name_filter(dev).execute();
+        if let Some(link) = links
+            .try_next()
+            .await
+            .map_err(|e| FError::NetworkingError(format!("{}", e)))?
+        {
+            let vxlan = state
+                .nl_handler
+                .link()
+                .add()
+                .vxlan(iface, vni)
+                .link(link.header.index);
 
-                    vxlan
-                        .port(port)
-                        .execute()
-                        .await
-                        .map_err(|e| FError::NetworkingError(format!("{}", e)))
-                } else {
-                    Err(FError::NotFound)
-                }
-            })
-            .map_err(|e| FError::NetworkingError(format!("{}", e)))
+            let vxlan = match mcast_addr {
+                IPAddress::V4(v4) => vxlan.group(v4),
+                IPAddress::V6(v6) => vxlan.group6(v6),
+            };
+
+            vxlan
+                .port(port)
+                .execute()
+                .await
+                .map_err(|e| FError::NetworkingError(format!("{}", e)))
+        } else {
+            Err(FError::NotFound)
+        }
     }
 
     async fn create_ptp_vxlan(
@@ -446,128 +415,86 @@ impl NSManager {
             port
         );
         let mut state = self.state.write().await;
-        state
-            .tokio_rt
-            .block_on(async {
-                let mut links = state.nl_handler.link().get().set_name_filter(dev).execute();
-                if let Some(link) = links
-                    .try_next()
-                    .await
-                    .map_err(|e| FError::NetworkingError(format!("{}", e)))?
-                {
-                    let vxlan = state
-                        .nl_handler
-                        .link()
-                        .add()
-                        .vxlan(iface, vni)
-                        .link(link.header.index);
+        let mut links = state.nl_handler.link().get().set_name_filter(dev).execute();
+        if let Some(link) = links
+            .try_next()
+            .await
+            .map_err(|e| FError::NetworkingError(format!("{}", e)))?
+        {
+            let vxlan = state
+                .nl_handler
+                .link()
+                .add()
+                .vxlan(iface, vni)
+                .link(link.header.index);
 
-                    let vxlan = match local_addr {
-                        IPAddress::V4(v4) => vxlan.local(v4),
-                        IPAddress::V6(v6) => vxlan.local6(v6),
-                    };
+            let vxlan = match local_addr {
+                IPAddress::V4(v4) => vxlan.local(v4),
+                IPAddress::V6(v6) => vxlan.local6(v6),
+            };
 
-                    let vxlan = match remote_addr {
-                        IPAddress::V4(v4) => vxlan.remote(v4),
-                        IPAddress::V6(v6) => vxlan.remote6(v6),
-                    };
+            let vxlan = match remote_addr {
+                IPAddress::V4(v4) => vxlan.remote(v4),
+                IPAddress::V6(v6) => vxlan.remote6(v6),
+            };
 
-                    vxlan
-                        .port(port)
-                        .execute()
-                        .await
-                        .map_err(|e| FError::NetworkingError(format!("{}", e)))
-                } else {
-                    Err(FError::NotFound)
-                }
-            })
-            .map_err(|e| FError::NetworkingError(format!("{}", e)))
+            vxlan
+                .port(port)
+                .execute()
+                .await
+                .map_err(|e| FError::NetworkingError(format!("{}", e)))
+        } else {
+            Err(FError::NotFound)
+        }
     }
 
     async fn del_iface(&self, iface: String) -> FResult<()> {
         log::trace!("del_iface {}", iface);
         let mut state = self.state.write().await;
-        state.tokio_rt.block_on(async {
-            let mut links = state
+        let mut links = state
+            .nl_handler
+            .link()
+            .get()
+            .set_name_filter(iface)
+            .execute();
+        if let Some(link) = links
+            .try_next()
+            .await
+            .map_err(|e| FError::NetworkingError(format!("{}", e)))?
+        {
+            state
                 .nl_handler
                 .link()
-                .get()
-                .set_name_filter(iface)
-                .execute();
-            if let Some(link) = links
-                .try_next()
+                .del(link.header.index)
+                .execute()
                 .await
-                .map_err(|e| FError::NetworkingError(format!("{}", e)))?
-            {
-                state
-                    .nl_handler
-                    .link()
-                    .del(link.header.index)
-                    .execute()
-                    .await
-                    .map_err(|e| FError::NetworkingError(format!("{}", e)))
-            } else {
-                Err(FError::NotFound)
-            }
-        })
+                .map_err(|e| FError::NetworkingError(format!("{}", e)))
+        } else {
+            Err(FError::NotFound)
+        }
     }
 
     async fn set_iface_master(&self, iface: String, master: String) -> FResult<()> {
         log::trace!("set_iface_master {} {}", iface, master);
         let mut state = self.state.write().await;
-        state.tokio_rt.block_on(async {
-            let mut links = state
+        let mut links = state
+            .nl_handler
+            .link()
+            .get()
+            .set_name_filter(iface)
+            .execute();
+        if let Some(link) = links
+            .try_next()
+            .await
+            .map_err(|e| FError::NetworkingError(format!("{}", e)))?
+        {
+            let mut masters = state
                 .nl_handler
                 .link()
                 .get()
-                .set_name_filter(iface)
+                .set_name_filter(master)
                 .execute();
-            if let Some(link) = links
-                .try_next()
-                .await
-                .map_err(|e| FError::NetworkingError(format!("{}", e)))?
-            {
-                let mut masters = state
-                    .nl_handler
-                    .link()
-                    .get()
-                    .set_name_filter(master)
-                    .execute();
-                if let Some(master) = masters
-                    .try_next()
-                    .await
-                    .map_err(|e| FError::NetworkingError(format!("{}", e)))?
-                {
-                    state
-                        .nl_handler
-                        .link()
-                        .set(link.header.index)
-                        .master(master.header.index)
-                        .execute()
-                        .await
-                        .map_err(|e| FError::NetworkingError(format!("{}", e)))
-                } else {
-                    log::error!("set_iface_master master not found");
-                    Err(FError::NotFound)
-                }
-            } else {
-                log::error!("set_iface_master iface not found");
-                Err(FError::NotFound)
-            }
-        })
-    }
-
-    async fn del_iface_master(&self, iface: String) -> FResult<()> {
-        log::trace!("del_iface_master {}", iface);
-        let mut state = self.state.write().await;
-        state.tokio_rt.block_on(async {
-            let mut links = state
-                .nl_handler
-                .link()
-                .get()
-                .set_name_filter(iface)
-                .execute();
-            if let Some(link) = links
+            if let Some(master) = masters
                 .try_next()
                 .await
                 .map_err(|e| FError::NetworkingError(format!("{}", e)))?
@@ -576,42 +503,71 @@ impl NSManager {
                     .nl_handler
                     .link()
                     .set(link.header.index)
-                    .nomaster()
+                    .master(master.header.index)
                     .execute()
                     .await
                     .map_err(|e| FError::NetworkingError(format!("{}", e)))
             } else {
-                log::error!("del_iface_master iface not found");
+                log::error!("set_iface_master master not found");
                 Err(FError::NotFound)
             }
-        })
+        } else {
+            log::error!("set_iface_master iface not found");
+            Err(FError::NotFound)
+        }
+    }
+
+    async fn del_iface_master(&self, iface: String) -> FResult<()> {
+        log::trace!("del_iface_master {}", iface);
+        let mut state = self.state.write().await;
+        let mut links = state
+            .nl_handler
+            .link()
+            .get()
+            .set_name_filter(iface)
+            .execute();
+        if let Some(link) = links
+            .try_next()
+            .await
+            .map_err(|e| FError::NetworkingError(format!("{}", e)))?
+        {
+            state
+                .nl_handler
+                .link()
+                .set(link.header.index)
+                .nomaster()
+                .execute()
+                .await
+                .map_err(|e| FError::NetworkingError(format!("{}", e)))
+        } else {
+            log::error!("del_iface_master iface not found");
+            Err(FError::NotFound)
+        }
     }
 
     async fn add_iface_address(&self, iface: String, addr: IPAddress, prefix: u8) -> FResult<()> {
         let mut state = self.state.write().await;
-        state.tokio_rt.block_on(async {
-            let mut links = state
+        let mut links = state
+            .nl_handler
+            .link()
+            .get()
+            .set_name_filter(iface)
+            .execute();
+        if let Some(link) = links
+            .try_next()
+            .await
+            .map_err(|e| FError::NetworkingError(format!("{}", e)))?
+        {
+            state
                 .nl_handler
-                .link()
-                .get()
-                .set_name_filter(iface)
-                .execute();
-            if let Some(link) = links
-                .try_next()
+                .address()
+                .add(link.header.index, addr, prefix)
+                .execute()
                 .await
-                .map_err(|e| FError::NetworkingError(format!("{}", e)))?
-            {
-                state
-                    .nl_handler
-                    .address()
-                    .add(link.header.index, addr, prefix)
-                    .execute()
-                    .await
-                    .map_err(|e| FError::NetworkingError(format!("{}", e)))
-            } else {
-                Err(FError::NotFound)
-            }
-        })
+                .map_err(|e| FError::NetworkingError(format!("{}", e)))
+        } else {
+            Err(FError::NotFound)
+        }
     }
 
     async fn get_iface_addresses(&self, iface: String) -> FResult<Vec<IPAddress>> {
@@ -619,338 +575,318 @@ impl NSManager {
         let mut state = self.state.write().await;
         use netlink_packet_route::rtnl::address::nlas::Nla;
         use netlink_packet_route::rtnl::address::AddressMessage;
-        state.tokio_rt.block_on(async {
-            let mut nl_addresses = Vec::new();
-            let mut f_addresses: Vec<IPAddress> = Vec::new();
-            let mut links = state
+        let mut nl_addresses = Vec::new();
+        let mut f_addresses: Vec<IPAddress> = Vec::new();
+        let mut links = state
+            .nl_handler
+            .link()
+            .get()
+            .set_name_filter(iface.clone())
+            .execute();
+        if let Some(link) = links
+            .try_next()
+            .await
+            .map_err(|e| FError::NetworkingError(format!("{}", e)))?
+        {
+            let mut addresses = state
                 .nl_handler
-                .link()
+                .address()
                 .get()
-                .set_name_filter(iface.clone())
+                .set_link_index_filter(link.header.index)
                 .execute();
-            if let Some(link) = links
+            while let Some(msg) = addresses
                 .try_next()
                 .await
                 .map_err(|e| FError::NetworkingError(format!("{}", e)))?
             {
-                let mut addresses = state
-                    .nl_handler
-                    .address()
-                    .get()
-                    .set_link_index_filter(link.header.index)
-                    .execute();
-                while let Some(msg) = addresses
-                    .try_next()
-                    .await
-                    .map_err(|e| FError::NetworkingError(format!("{}", e)))?
-                {
-                    for nla in &msg.nlas {
-                        match nla {
-                            Nla::Address(nl_addr) => {
-                                nl_addresses.push((msg.header.clone(), nl_addr.clone()))
-                            }
-                            _ => continue,
+                for nla in &msg.nlas {
+                    match nla {
+                        Nla::Address(nl_addr) => {
+                            nl_addresses.push((msg.header.clone(), nl_addr.clone()))
                         }
+                        _ => continue,
                     }
                 }
-                for (_, x) in nl_addresses {
-                    if x.len() == 4 {
-                        let octects: [u8; 4] = [x[0], x[1], x[2], x[3]];
-                        f_addresses.push(IPAddress::from(octects))
-                    }
-                    if x.len() == 16 {
-                        let octects: [u8; 16] = [
-                            x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7], x[8], x[9], x[10],
-                            x[11], x[12], x[13], x[14], x[15],
-                        ];
-                        f_addresses.push(IPAddress::from(octects))
-                    }
-                }
-                Ok(f_addresses)
-            } else {
-                Err(FError::NotFound)
             }
-        })
+            for (_, x) in nl_addresses {
+                if x.len() == 4 {
+                    let octects: [u8; 4] = [x[0], x[1], x[2], x[3]];
+                    f_addresses.push(IPAddress::from(octects))
+                }
+                if x.len() == 16 {
+                    let octects: [u8; 16] = [
+                        x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7], x[8], x[9], x[10], x[11],
+                        x[12], x[13], x[14], x[15],
+                    ];
+                    f_addresses.push(IPAddress::from(octects))
+                }
+            }
+            Ok(f_addresses)
+        } else {
+            Err(FError::NotFound)
+        }
     }
 
     async fn del_iface_address(&self, iface: String, addr: IPAddress) -> FResult<()> {
         let mut state = self.state.write().await;
         use netlink_packet_route::rtnl::address::nlas::Nla;
         use netlink_packet_route::rtnl::address::AddressMessage;
-        state.tokio_rt.block_on(async {
-            let octets = match addr {
-                IPAddress::V4(a) => a.octets().to_vec(),
-                IPAddress::V6(a) => a.octets().to_vec(),
-            };
-            let mut nl_addresses = Vec::new();
-            let mut links = state
+        let octets = match addr {
+            IPAddress::V4(a) => a.octets().to_vec(),
+            IPAddress::V6(a) => a.octets().to_vec(),
+        };
+        let mut nl_addresses = Vec::new();
+        let mut links = state
+            .nl_handler
+            .link()
+            .get()
+            .set_name_filter(iface.clone())
+            .execute();
+        if let Some(link) = links
+            .try_next()
+            .await
+            .map_err(|e| FError::NetworkingError(format!("{}", e)))?
+        {
+            let mut addresses = state
                 .nl_handler
-                .link()
+                .address()
                 .get()
-                .set_name_filter(iface.clone())
+                .set_link_index_filter(link.header.index)
                 .execute();
-            if let Some(link) = links
+            while let Some(msg) = addresses
                 .try_next()
                 .await
                 .map_err(|e| FError::NetworkingError(format!("{}", e)))?
             {
-                let mut addresses = state
-                    .nl_handler
-                    .address()
-                    .get()
-                    .set_link_index_filter(link.header.index)
-                    .execute();
-                while let Some(msg) = addresses
-                    .try_next()
-                    .await
-                    .map_err(|e| FError::NetworkingError(format!("{}", e)))?
-                {
-                    for nla in &msg.nlas {
-                        match nla {
-                            Nla::Address(nl_addr) => {
-                                nl_addresses.push((msg.header.clone(), nl_addr.clone()))
-                            }
-                            _ => continue,
+                for nla in &msg.nlas {
+                    match nla {
+                        Nla::Address(nl_addr) => {
+                            nl_addresses.push((msg.header.clone(), nl_addr.clone()))
                         }
+                        _ => continue,
                     }
                 }
-                match nl_addresses.into_iter().find(|(_, x)| *x == octets) {
-                    Some((hdr, addr)) => {
-                        let msg = AddressMessage {
-                            header: hdr,
-                            nlas: vec![Nla::Address(addr)],
-                        };
-                        state
-                            .nl_handler
-                            .address()
-                            .del(msg)
-                            .execute()
-                            .await
-                            .map_err(|e| FError::NetworkingError(format!("{}", e)))?;
-                        Ok(())
-                    }
-                    None => Err(FError::NotFound),
-                }
-            } else {
-                Err(FError::NotFound)
             }
-        })
+            match nl_addresses.into_iter().find(|(_, x)| *x == octets) {
+                Some((hdr, addr)) => {
+                    let msg = AddressMessage {
+                        header: hdr,
+                        nlas: vec![Nla::Address(addr)],
+                    };
+                    state
+                        .nl_handler
+                        .address()
+                        .del(msg)
+                        .execute()
+                        .await
+                        .map_err(|e| FError::NetworkingError(format!("{}", e)))?;
+                    Ok(())
+                }
+                None => Err(FError::NotFound),
+            }
+        } else {
+            Err(FError::NotFound)
+        }
     }
 
     async fn set_iface_name(&self, iface: String, new_name: String) -> FResult<()> {
         let mut state = self.state.write().await;
-        state.tokio_rt.block_on(async {
-            let mut links = state
+        let mut links = state
+            .nl_handler
+            .link()
+            .get()
+            .set_name_filter(iface)
+            .execute();
+        if let Some(link) = links
+            .try_next()
+            .await
+            .map_err(|e| FError::NetworkingError(format!("{}", e)))?
+        {
+            state
                 .nl_handler
                 .link()
-                .get()
-                .set_name_filter(iface)
-                .execute();
-            if let Some(link) = links
-                .try_next()
+                .set(link.header.index)
+                .name(new_name)
+                .execute()
                 .await
-                .map_err(|e| FError::NetworkingError(format!("{}", e)))?
-            {
-                state
-                    .nl_handler
-                    .link()
-                    .set(link.header.index)
-                    .name(new_name)
-                    .execute()
-                    .await
-                    .map_err(|e| FError::NetworkingError(format!("{}", e)))
-            } else {
-                Err(FError::NotFound)
-            }
-        })
+                .map_err(|e| FError::NetworkingError(format!("{}", e)))
+        } else {
+            Err(FError::NotFound)
+        }
     }
 
     async fn set_iface_mac(&self, iface: String, address: Vec<u8>) -> FResult<()> {
         let mut state = self.state.write().await;
-        state.tokio_rt.block_on(async {
-            let mut links = state
+        let mut links = state
+            .nl_handler
+            .link()
+            .get()
+            .set_name_filter(iface)
+            .execute();
+        if let Some(link) = links
+            .try_next()
+            .await
+            .map_err(|e| FError::NetworkingError(format!("{}", e)))?
+        {
+            state
                 .nl_handler
                 .link()
-                .get()
-                .set_name_filter(iface)
-                .execute();
-            if let Some(link) = links
-                .try_next()
+                .set(link.header.index)
+                .address(address)
+                .execute()
                 .await
-                .map_err(|e| FError::NetworkingError(format!("{}", e)))?
-            {
-                state
-                    .nl_handler
-                    .link()
-                    .set(link.header.index)
-                    .address(address)
-                    .execute()
-                    .await
-                    .map_err(|e| FError::NetworkingError(format!("{}", e)))
-            } else {
-                Err(FError::NotFound)
-            }
-        })
+                .map_err(|e| FError::NetworkingError(format!("{}", e)))
+        } else {
+            Err(FError::NotFound)
+        }
     }
 
     async fn set_iface_default_ns(&self, iface: String) -> FResult<()> {
         let mut state = self.state.write().await;
-        state.tokio_rt.block_on(async {
-            let mut links = state
+        let mut links = state
+            .nl_handler
+            .link()
+            .get()
+            .set_name_filter(iface)
+            .execute();
+        if let Some(link) = links
+            .try_next()
+            .await
+            .map_err(|e| FError::NetworkingError(format!("{}", e)))?
+        {
+            state
                 .nl_handler
                 .link()
-                .get()
-                .set_name_filter(iface)
-                .execute();
-            if let Some(link) = links
-                .try_next()
+                .set(link.header.index)
+                .setns_by_pid(1)
+                .execute()
                 .await
-                .map_err(|e| FError::NetworkingError(format!("{}", e)))?
-            {
-                state
-                    .nl_handler
-                    .link()
-                    .set(link.header.index)
-                    .setns_by_pid(1)
-                    .execute()
-                    .await
-                    .map_err(|e| FError::NetworkingError(format!("{}", e)))
-            } else {
-                Err(FError::NotFound)
-            }
-        })
+                .map_err(|e| FError::NetworkingError(format!("{}", e)))
+        } else {
+            Err(FError::NotFound)
+        }
     }
 
     async fn set_iface_up(&self, iface: String) -> FResult<()> {
         log::trace!("set_iface_up {}", iface);
         let mut state = self.state.write().await;
-        state.tokio_rt.block_on(async {
-            let mut links = state
+        let mut links = state
+            .nl_handler
+            .link()
+            .get()
+            .set_name_filter(iface)
+            .execute();
+        if let Some(link) = links
+            .try_next()
+            .await
+            .map_err(|e| FError::NetworkingError(format!("{}", e)))?
+        {
+            state
                 .nl_handler
                 .link()
-                .get()
-                .set_name_filter(iface)
-                .execute();
-            if let Some(link) = links
-                .try_next()
+                .set(link.header.index)
+                .up()
+                .execute()
                 .await
-                .map_err(|e| FError::NetworkingError(format!("{}", e)))?
-            {
-                state
-                    .nl_handler
-                    .link()
-                    .set(link.header.index)
-                    .up()
-                    .execute()
-                    .await
-                    .map_err(|e| FError::NetworkingError(format!("{}", e)))
-            } else {
-                Err(FError::NotFound)
-            }
-        })
+                .map_err(|e| FError::NetworkingError(format!("{}", e)))
+        } else {
+            Err(FError::NotFound)
+        }
     }
 
     async fn set_iface_down(&self, iface: String) -> FResult<()> {
         let mut state = self.state.write().await;
-        state.tokio_rt.block_on(async {
-            let mut links = state
+        let mut links = state
+            .nl_handler
+            .link()
+            .get()
+            .set_name_filter(iface)
+            .execute();
+        if let Some(link) = links
+            .try_next()
+            .await
+            .map_err(|e| FError::NetworkingError(format!("{}", e)))?
+        {
+            state
                 .nl_handler
                 .link()
-                .get()
-                .set_name_filter(iface)
-                .execute();
-            if let Some(link) = links
-                .try_next()
+                .set(link.header.index)
+                .down()
+                .execute()
                 .await
-                .map_err(|e| FError::NetworkingError(format!("{}", e)))?
-            {
-                state
-                    .nl_handler
-                    .link()
-                    .set(link.header.index)
-                    .down()
-                    .execute()
-                    .await
-                    .map_err(|e| FError::NetworkingError(format!("{}", e)))
-            } else {
-                Err(FError::NotFound)
-            }
-        })
+                .map_err(|e| FError::NetworkingError(format!("{}", e)))
+        } else {
+            Err(FError::NotFound)
+        }
     }
 
     async fn iface_exists(&self, iface: String) -> FResult<bool> {
         log::trace!("iface_exists {}", iface);
         let mut state = self.state.write().await;
-        state.tokio_rt.block_on(async {
-            let mut links = state
-                .nl_handler
-                .link()
-                .get()
-                .set_name_filter(iface)
-                .execute();
-            if let Some(link) = links
-                .try_next()
-                .await
-                .map_err(|e| FError::NetworkingError(format!("{}", e)))?
-            {
-                Ok(true)
-            } else {
-                Ok(false)
-            }
-        })
+        let mut links = state
+            .nl_handler
+            .link()
+            .get()
+            .set_name_filter(iface)
+            .execute();
+        if let Some(link) = links
+            .try_next()
+            .await
+            .map_err(|e| FError::NetworkingError(format!("{}", e)))?
+        {
+            Ok(true)
+        } else {
+            Ok(false)
+        }
     }
 
     async fn dump_links(&self) -> FResult<Vec<String>> {
         log::trace!("dump_links");
         let mut ifaces = Vec::new();
         let mut state = self.state.write().await;
-        state.tokio_rt.block_on(async {
-            let mut links = state.nl_handler.link().get().execute();
-            while let Some(msg) = links
-                .try_next()
-                .await
-                .map_err(|e| FError::NetworkingError(format!("{}", e)))?
-            {
-                for nla in msg.nlas.into_iter() {
-                    if let LinkNla::IfName(name) = nla {
-                        ifaces.push(name);
-                        break;
-                    }
+        let mut links = state.nl_handler.link().get().execute();
+        while let Some(msg) = links
+            .try_next()
+            .await
+            .map_err(|e| FError::NetworkingError(format!("{}", e)))?
+        {
+            for nla in msg.nlas.into_iter() {
+                if let LinkNla::IfName(name) = nla {
+                    ifaces.push(name);
+                    break;
                 }
             }
-            Ok(ifaces)
-        })
+        }
+        Ok(ifaces)
     }
 
     async fn add_default_route(&self, iface: String) -> FResult<()> {
         log::trace!("add_default_route({})", iface);
         let mut state = self.state.write().await;
-        state.tokio_rt.block_on(async {
-            let mut links = state
+        let mut links = state
+            .nl_handler
+            .link()
+            .get()
+            .set_name_filter(iface)
+            .execute();
+        if let Some(link) = links
+            .try_next()
+            .await
+            .map_err(|e| FError::NetworkingError(format!("{}", e)))?
+        {
+            state
                 .nl_handler
-                .link()
-                .get()
-                .set_name_filter(iface)
-                .execute();
-            if let Some(link) = links
-                .try_next()
+                .route()
+                .add()
+                .v4()
+                .destination_prefix(std::net::Ipv4Addr::new(0, 0, 0, 0), 0u8)
+                .output_interface(link.header.index)
+                .execute()
                 .await
-                .map_err(|e| FError::NetworkingError(format!("{}", e)))?
-            {
-                state
-                    .nl_handler
-                    .route()
-                    .add()
-                    .v4()
-                    .destination_prefix(std::net::Ipv4Addr::new(0, 0, 0, 0), 0u8)
-                    .output_interface(link.header.index)
-                    .execute()
-                    .await
-                    .map_err(|e| FError::NetworkingError(format!("{}", e)))
-            } else {
-                Err(FError::NotFound)
-            }
-        })
+                .map_err(|e| FError::NetworkingError(format!("{}", e)))
+        } else {
+            Err(FError::NotFound)
+        }
     }
 }
 
