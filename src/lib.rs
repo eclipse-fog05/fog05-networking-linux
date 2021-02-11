@@ -1,5 +1,5 @@
 /*********************************************************************************
-* Copyright (c) 2018,2020 ADLINK Technology Inc.
+* Copyright (c) 2018,2021 ADLINK Technology Inc.
 *
 * This program and the accompanying materials are made available under the
 * terms of the Eclipse Public License 2.0 which is available at
@@ -10,6 +10,8 @@
 * Contributors:
 *   ADLINK fog05 team, <fog05@adlink-labs.tech>
 *********************************************************************************/
+#![allow(clippy::upper_case_acronyms)]
 
 pub mod networking;
+pub mod plugin;
 pub mod types;

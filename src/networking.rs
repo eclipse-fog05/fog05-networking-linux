@@ -1,5 +1,5 @@
 /*********************************************************************************
-* Copyright (c) 2018,2020 ADLINK Technology Inc.
+* Copyright (c) 2018,2021 ADLINK Technology Inc.
 *
 * This program and the accompanying materials are made available under the
 * terms of the Eclipse Public License 2.0 which is available at
@@ -38,9 +38,9 @@ use fog05_sdk::fresult::{FError, FResult};
 use fog05_sdk::plugins::NetworkingPlugin;
 use fog05_sdk::types::{
     BridgeKind, ConnectionPoint, GREKind, IPAddress, IPConfiguration, IPVersion, Interface,
-    InterfaceKind, LinkKind, MACAddress, MACVLANKind, MCastVXLANInfo, NetworkNamespace, PluginKind,
-    VETHKind, VLANKind, VXLANKind, VirtualInterface, VirtualInterfaceConfig,
-    VirtualInterfaceConfigKind, VirtualInterfaceKind, VirtualNetwork,
+    InterfaceKind, LinkKind, MACAddress, MACVLANKind, MCastVXLANInfo, NetworkNamespace,
+    P2PVXLANInfo, PluginKind, VETHKind, VLANKind, VXLANKind, VirtualInterface,
+    VirtualInterfaceConfig, VirtualInterfaceConfigKind, VirtualInterfaceKind, VirtualNetwork,
 };
 
 use uuid::Uuid;
@@ -441,6 +441,12 @@ impl NetworkingPlugin for LinuxNetwork {
                     LinkKind::L2(link_kind_info) => {
                         //Multicast-based VxLAN
                         let vnet = self.mcast_vxlan_create(vnet, link_kind_info).await?;
+                        self.connector.local.add_virutal_network(&vnet).await?;
+                        Ok(vnet)
+                    }
+                    LinkKind::ELINE(link_kind_info) => {
+                        //P2P-based VxLAN
+                        let vnet = self.ptp_vxlan_create(vnet, link_kind_info).await?;
                         self.connector.local.add_virutal_network(&vnet).await?;
                         Ok(vnet)
                     }
@@ -2150,6 +2156,248 @@ impl LinuxNetwork {
             self.get_overlay_iface().await?,
             vxlan_info.vni,
             vxlan_info.mcast_addr,
+            vxlan_info.port,
+        )
+        .await?;
+        self.connector.local.add_interface(&vxl_iface).await?;
+
+        vnet.interfaces.push(vxl_uuid);
+
+        self.set_iface_master(vxl_name.clone(), br_name.clone())
+            .await?;
+        self.set_iface_up(vxl_name).await?;
+
+        // Creating netns and spawing the namespace manager
+        self.add_netns(associated_ns.ns_name.clone()).await?;
+        self.spawn_ns_manager(associated_ns.ns_name.clone(), associated_ns.uuid)
+            .await?;
+
+        self.connector
+            .local
+            .add_network_namespace(&associated_ns)
+            .await?;
+
+        // Creating veth pair
+        self.create_veth(external_veth_name.clone(), internal_veth_name.clone())
+            .await?;
+
+        self.connector.local.add_interface(&v_veth_e).await?;
+
+        vnet.interfaces.push(internal_veth_uuid);
+
+        self.connector.local.add_interface(&v_veth_i).await?;
+
+        vnet.interfaces.push(external_veth_uuid);
+
+        self.set_iface_master(external_veth_name.clone(), br_name.clone())
+            .await?;
+        self.set_iface_up(external_veth_name).await?;
+
+        self.set_iface_ns(
+            internal_veth_name.clone(),
+            associated_ns.ns_name.clone().clone(),
+        )
+        .await?;
+
+        // create internal bridge
+        let ns_manager = self.get_ns_manager(&associated_ns.uuid).await?;
+
+        // This is used to wait that the namespace manager is ready to serve
+        while !ns_manager.verify_server().await? {}
+
+        ns_manager
+            .set_virtual_interface_up("lo".to_string())
+            .await??;
+
+        ns_manager
+            .add_virtual_interface_bridge(internal_br_name.clone())
+            .await??;
+
+        ns_manager
+            .set_virtual_interface_up(internal_br_name.clone())
+            .await??;
+
+        vnet.interfaces.push(internal_br_uuid);
+
+        self.connector
+            .local
+            .add_interface(&v_internal_bridge)
+            .await?;
+
+        ns_manager
+            .set_virtual_interface_master(internal_veth_name.clone(), internal_br_name.clone())
+            .await??;
+
+        ns_manager
+            .set_virtual_interface_up(internal_veth_name.clone())
+            .await??;
+
+        // NAT configuration, skip it for the time being...
+        // let nat_table = self
+        //     .configure_nat(
+        //         IpNetwork::V4(
+        //             ipnetwork::Ipv4Network::new(
+        //                 std::net::Ipv4Addr::new(10, 240, 0, 0),
+        //                 16,
+        //             )
+        //             .map_err(|e| FError::NetworkingError(format!("{}", e)))?,
+        //         ),
+        //         &self.get_overlay_face_from_config().await?.if_name,
+        //     )
+        //     .await?;
+
+        // DHCP configuration and spawn
+
+        let dhcp_internal = match &vnet.ip_configuration {
+            Some(conf) => None,
+            None => None,
+        };
+
+        let ns_info = Some(VNetNetns {
+            ns_name: associated_ns.ns_name.clone(),
+            ns_uuid: associated_ns.uuid,
+        });
+
+        let internals = VirtualNetworkInternals {
+            associated_netns: ns_info,
+            dhcp: dhcp_internal,
+            associated_tables: vec![],
+        };
+        vnet.plugin_internals = Some(serialize_network_internals(&internals)?);
+        Ok(vnet)
+    }
+
+    async fn ptp_vxlan_create(
+        &self,
+        mut vnet: VirtualNetwork,
+        vxlan_info: P2PVXLANInfo,
+    ) -> FResult<VirtualNetwork> {
+        let node_uuid = self.agent.as_ref().unwrap().get_node_uuid().await??;
+
+        // Generating Names
+
+        let br_uuid = Uuid::new_v4();
+        let br_name = self.generate_random_interface_name();
+
+        let vxl_uuid = Uuid::new_v4();
+        let vxl_name = self.generate_random_interface_name();
+
+        let internal_br_uuid = Uuid::new_v4();
+        let internal_br_name = self.generate_random_interface_name();
+
+        let internal_veth_uuid = Uuid::new_v4();
+        let internal_veth_name = self.generate_random_interface_name();
+
+        let external_veth_uuid = Uuid::new_v4();
+        let external_veth_name = self.generate_random_interface_name();
+
+        let mut associated_ns = NetworkNamespace {
+            uuid: vnet.uuid,
+            ns_name: self.generate_random_netns_name(),
+            interfaces: vec![
+                external_veth_uuid,
+                internal_veth_uuid,
+                internal_br_uuid,
+                vxl_uuid,
+                br_uuid,
+            ],
+        };
+
+        // Generating Structs
+
+        let v_bridge = VirtualInterface {
+            uuid: br_uuid,
+            if_name: br_name.clone(),
+            net_ns: None,
+            parent: None,
+            kind: VirtualInterfaceKind::BRIDGE(BridgeKind {
+                childs: vec![external_veth_uuid, vxl_uuid],
+            }),
+            addresses: Vec::new(),
+            phy_address: MACAddress::new(0, 0, 0, 0, 0, 0),
+        };
+
+        let v_internal_bridge = VirtualInterface {
+            uuid: internal_br_uuid,
+            if_name: internal_br_name.clone(),
+            net_ns: Some(associated_ns.uuid),
+            parent: None,
+            kind: VirtualInterfaceKind::BRIDGE(BridgeKind {
+                childs: vec![internal_veth_uuid],
+            }),
+            addresses: Vec::new(),
+            phy_address: MACAddress::new(0, 0, 0, 0, 0, 0),
+        };
+
+        let vxl_iface = VirtualInterface {
+            uuid: vxl_uuid,
+            if_name: vxl_name.clone(),
+            net_ns: None,
+            parent: Some(br_uuid),
+            kind: VirtualInterfaceKind::VXLAN(VXLANKind {
+                vni: vxlan_info.vni,
+                port: vxlan_info.port,
+                mcast_addr: vxlan_info.remote_addr,
+                dev: Interface {
+                    if_name: self.get_overlay_iface().await?,
+                    kind: InterfaceKind::ETHERNET,
+                    addresses: Vec::new(),
+                    phy_address: None,
+                },
+            }),
+            addresses: Vec::new(),
+            phy_address: MACAddress::new(0, 0, 0, 0, 0, 0),
+        };
+
+        let v_veth_i = VirtualInterface {
+            uuid: internal_veth_uuid,
+            if_name: internal_veth_name.clone(),
+            net_ns: Some(associated_ns.uuid),
+            parent: Some(internal_br_uuid),
+            kind: VirtualInterfaceKind::VETH(VETHKind {
+                pair: external_veth_uuid,
+                internal: true,
+            }),
+            addresses: Vec::new(),
+            phy_address: MACAddress::new(0, 0, 0, 0, 0, 0),
+        };
+
+        let v_veth_e = VirtualInterface {
+            uuid: external_veth_uuid,
+            if_name: external_veth_name.clone(),
+            net_ns: None,
+            parent: Some(br_uuid),
+            kind: VirtualInterfaceKind::VETH(VETHKind {
+                pair: internal_veth_uuid,
+                internal: false,
+            }),
+            addresses: Vec::new(),
+            phy_address: MACAddress::new(0, 0, 0, 0, 0, 0),
+        };
+
+        // Creating Virtual network bridge
+
+        self.create_bridge(br_name.clone()).await?;
+        self.connector.local.add_interface(&v_bridge).await?;
+
+        vnet.interfaces.push(br_uuid);
+
+        self.set_iface_up(br_name.clone()).await?;
+
+        // Creating VXLAN Interface
+
+        let overlay_iface_address = *self
+            .get_overlay_face_from_config()
+            .await?
+            .addresses
+            .first()
+            .ok_or(FError::NotFound)?;
+        self.create_ptp_vxlan(
+            vxl_name.clone(),
+            self.get_overlay_iface().await?,
+            vxlan_info.vni,
+            overlay_iface_address,
+            vxlan_info.remote_addr,
             vxlan_info.port,
         )
         .await?;

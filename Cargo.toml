@@ -67,7 +67,7 @@ bench = false
 
 [package.metadata.deb]
 maintainer = "ADLINK fog05 team <fog05@adlink-labs.tech>"
-copyright = "2020, ADLINK Technology Inc"
+copyright = "2021, ADLINK Technology Inc"
 extended-description = "Eclipse fog05 Linux Networking Plugin"
 license-file = ["LICENSE.md", "0"]
 maintainer-scripts = "resources/debian/"
