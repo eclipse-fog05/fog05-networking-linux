@@ -13,5 +13,5 @@
 #![allow(clippy::upper_case_acronyms)]
 
 pub mod networking;
-pub mod plugin;
+// pub mod plugin;
 pub mod types;
