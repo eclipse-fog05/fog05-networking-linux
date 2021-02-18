@@ -201,7 +201,9 @@ fn main() {
                 let mut signals = signals.fuse();
                 if let Some(signal) = signals.next().await {
                     match signal {
-                        signal_hook::consts::SIGTERM | signal_hook::consts::SIGINT | signal_hook::consts::SIGQUIT => {
+                        signal_hook::consts::SIGTERM
+                        | signal_hook::consts::SIGINT
+                        | signal_hook::consts::SIGQUIT => {
                             log::trace!("Received stop signal closing...");
                             manager.stop(s).await.unwrap();
                         }
