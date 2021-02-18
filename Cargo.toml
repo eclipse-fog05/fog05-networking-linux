@@ -32,24 +32,24 @@ netlink-packet-route = { git = "https://github.com/little-dude/netlink", branch 
 derive_more = "0.99.10"
 semver = { version = "0.11.0", features = ["serde"]}
 uuid = { version = "0.8.1", features = ["serde", "v4"] }
-base64 = "0.12.3"
+base64 = "0.13.0"
 url = "2.1.1"
 mac_address = {version =  "1.1.1", features = ["serde"]}
 async-ctrlc ={version = "1.2.0", features = ["stream"]}
-reqwest = { version = "0.10", features = ["blocking", "json"] }
-rand = "0.7.3"
+reqwest = { version = "0.11.0", features = ["blocking", "json"] }
+rand = "0.8.3"
 nix = "0.19.0"
 clap = "2.33"
 structopt = "0.3.13"
 log = "0.4"
-env_logger = "0.7.1"
+env_logger = "0.8.3"
 git-version = "0.3.4"
 tera = "1.5.0"
 nftnl = "0.6.0"
 ipnetwork = "0.17.0"
 mnl = "0.2"
-signal-hook = "0.2.1"
-signal-hook-async-std = "0.1.0"
+signal-hook = "0.3.4"
+signal-hook-async-std = "0.2.1"
 
 [[bin]]
 name = "linux-networking"

@@ -2548,18 +2548,30 @@ impl LinuxNetwork {
     }
 
     fn generate_random_interface_name(&self) -> String {
-        let iface: String = thread_rng().sample_iter(&Alphanumeric).take(8).collect();
+        let iface: String = thread_rng()
+            .sample_iter(&Alphanumeric)
+            .take(8)
+            .map(|x| format!("{}", x))
+            .collect();
         iface
     }
 
     fn generate_random_netns_name(&self) -> String {
-        let ns: String = thread_rng().sample_iter(&Alphanumeric).take(8).collect();
+        let ns: String = thread_rng()
+            .sample_iter(&Alphanumeric)
+            .take(8)
+            .map(|x| format!("{}", x))
+            .collect();
         format!("ns-{}", ns)
     }
 
     fn generate_random_nft_table_name(&self) -> String {
-        let ns: String = thread_rng().sample_iter(&Alphanumeric).take(10).collect();
-        format!("table{}", ns)
+        let tab: String = thread_rng()
+            .sample_iter(&Alphanumeric)
+            .take(10)
+            .map(|x| format!("{}", x))
+            .collect();
+        format!("table{}", tab)
     }
 
     async fn add_netns(&self, ns_name: String) -> FResult<()> {
