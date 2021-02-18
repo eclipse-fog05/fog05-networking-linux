@@ -51,6 +51,7 @@ use rand::distributions::Alphanumeric;
 use rand::{thread_rng, Rng};
 
 use netlink_packet_route::rtnl::address::nlas::Nla;
+use rtnetlink::Error as nlError;
 use rtnetlink::NetworkNamespace as NetlinkNetworkNamespace;
 use rtnetlink::{new_connection, Handle};
 
@@ -2590,34 +2591,73 @@ impl LinuxNetwork {
 
     async fn create_bridge(&self, br_name: String) -> FResult<()> {
         log::trace!("create_bridge {}", br_name);
-        let mut state = self.state.write().await;
-        state
-            .nl_handler
-            .link()
-            .add()
-            .bridge(br_name)
-            .execute()
-            .await
-            .map_err(|e| FError::NetworkingError(format!("{}", e)))
+        let mut backoff = 100;
+        loop {
+            let mut state = self.state.write().await;
+            let res = state
+                .nl_handler
+                .link()
+                .add()
+                .bridge(br_name.clone())
+                .execute()
+                .await;
+            drop(state);
+
+            match res {
+                Ok(_) => return Ok(()),
+                Err(nlError::NetlinkError(nl)) => {
+                    if nl.code == -16 {
+                        task::sleep(Duration::from_millis(backoff)).await;
+                    } else {
+                        return Err(FError::NetworkingError(format!("{}", nl)));
+                    }
+                }
+                Err(e) => return Err(FError::NetworkingError(format!("{}", e))),
+            }
+            backoff *= 2;
+            if backoff > 5000 {
+                return Err(FError::NetworkingError("Timeout".to_string()));
+            }
+        }
     }
 
     async fn create_veth(&self, iface_i: String, iface_e: String) -> FResult<()> {
         log::trace!("create_veth {} {}", iface_i, iface_e);
-        let mut state = self.state.write().await;
 
-        state
-            .nl_handler
-            .link()
-            .add()
-            .veth(iface_i, iface_e)
-            .execute()
-            .await
-            .map_err(|e| FError::NetworkingError(format!("{}", e)))
+        let mut backoff = 100;
+        loop {
+            let mut state = self.state.write().await;
+
+            let res = state
+                .nl_handler
+                .link()
+                .add()
+                .veth(iface_i.clone(), iface_e.clone())
+                .execute()
+                .await;
+            drop(state);
+            match res {
+                Ok(_) => return Ok(()),
+                Err(nlError::NetlinkError(nl)) => {
+                    if nl.code == -16 {
+                        task::sleep(Duration::from_millis(backoff)).await;
+                    } else {
+                        return Err(FError::NetworkingError(format!("{}", nl)));
+                    }
+                }
+                Err(e) => return Err(FError::NetworkingError(format!("{}", e))),
+            }
+            backoff *= 2;
+            if backoff > 5000 {
+                return Err(FError::NetworkingError("Timeout".to_string()));
+            }
+        }
     }
 
     async fn create_vlan(&self, iface: String, dev: String, tag: u16) -> FResult<()> {
         let mut state = self.state.write().await;
         log::trace!("create_vlan {} {} {}", iface, dev, tag);
+        let mut backoff = 100;
 
         let mut links = state.nl_handler.link().get().set_name_filter(dev).execute();
         if let Some(link) = links
@@ -2625,14 +2665,30 @@ impl LinuxNetwork {
             .await
             .map_err(|e| FError::NetworkingError(format!("{}", e)))?
         {
-            state
-                .nl_handler
-                .link()
-                .add()
-                .vlan(iface, link.header.index, tag)
-                .execute()
-                .await
-                .map_err(|e| FError::NetworkingError(format!("{}", e)))
+            loop {
+                let res = state
+                    .nl_handler
+                    .link()
+                    .add()
+                    .vlan(iface.clone(), link.header.index, tag)
+                    .execute()
+                    .await;
+                match res {
+                    Ok(_) => return Ok(()),
+                    Err(nlError::NetlinkError(nl)) => {
+                        if nl.code == -16 {
+                            task::sleep(Duration::from_millis(backoff)).await;
+                        } else {
+                            return Err(FError::NetworkingError(format!("{}", nl)));
+                        }
+                    }
+                    Err(e) => return Err(FError::NetworkingError(format!("{}", e))),
+                }
+                backoff *= 2;
+                if backoff > 5000 {
+                    return Err(FError::NetworkingError("Timeout".to_string()));
+                }
+            }
         } else {
             Err(FError::NotFound)
         }
@@ -2654,6 +2710,7 @@ impl LinuxNetwork {
             mcast_addr,
             port
         );
+        let mut backoff = 100;
         let mut state = self.state.write().await;
 
         let mut links = state.nl_handler.link().get().set_name_filter(dev).execute();
@@ -2662,23 +2719,36 @@ impl LinuxNetwork {
             .await
             .map_err(|e| FError::NetworkingError(format!("{}", e)))?
         {
-            let vxlan = state
-                .nl_handler
-                .link()
-                .add()
-                .vxlan(iface, vni)
-                .link(link.header.index);
+            loop {
+                let vxlan = state
+                    .nl_handler
+                    .link()
+                    .add()
+                    .vxlan(iface.clone(), vni)
+                    .link(link.header.index);
 
-            let vxlan = match mcast_addr {
-                IPAddress::V4(v4) => vxlan.group(v4),
-                IPAddress::V6(v6) => vxlan.group6(v6),
-            };
+                let vxlan = match mcast_addr {
+                    IPAddress::V4(v4) => vxlan.group(v4),
+                    IPAddress::V6(v6) => vxlan.group6(v6),
+                };
 
-            vxlan
-                .port(port)
-                .execute()
-                .await
-                .map_err(|e| FError::NetworkingError(format!("{}", e)))
+                let res = vxlan.port(port).execute().await;
+                match res {
+                    Ok(_) => return Ok(()),
+                    Err(nlError::NetlinkError(nl)) => {
+                        if nl.code == -16 {
+                            task::sleep(Duration::from_millis(backoff)).await;
+                        } else {
+                            return Err(FError::NetworkingError(format!("{}", nl)));
+                        }
+                    }
+                    Err(e) => return Err(FError::NetworkingError(format!("{}", e))),
+                }
+                backoff *= 2;
+                if backoff > 5000 {
+                    return Err(FError::NetworkingError("Timeout".to_string()));
+                }
+            }
         } else {
             Err(FError::NotFound)
         }
@@ -2702,6 +2772,7 @@ impl LinuxNetwork {
             remote_addr,
             port
         );
+        let mut backoff = 100;
         let mut state = self.state.write().await;
         let mut links = state.nl_handler.link().get().set_name_filter(dev).execute();
         if let Some(link) = links
@@ -2709,28 +2780,40 @@ impl LinuxNetwork {
             .await
             .map_err(|e| FError::NetworkingError(format!("{}", e)))?
         {
-            let vxlan = state
-                .nl_handler
-                .link()
-                .add()
-                .vxlan(iface, vni)
-                .link(link.header.index);
+            loop {
+                let vxlan = state
+                    .nl_handler
+                    .link()
+                    .add()
+                    .vxlan(iface.clone(), vni)
+                    .link(link.header.index);
 
-            let vxlan = match local_addr {
-                IPAddress::V4(v4) => vxlan.local(v4),
-                IPAddress::V6(v6) => vxlan.local6(v6),
-            };
+                let vxlan = match local_addr {
+                    IPAddress::V4(v4) => vxlan.local(v4),
+                    IPAddress::V6(v6) => vxlan.local6(v6),
+                };
 
-            let vxlan = match remote_addr {
-                IPAddress::V4(v4) => vxlan.remote(v4),
-                IPAddress::V6(v6) => vxlan.remote6(v6),
-            };
-
-            vxlan
-                .port(port)
-                .execute()
-                .await
-                .map_err(|e| FError::NetworkingError(format!("{}", e)))
+                let vxlan = match remote_addr {
+                    IPAddress::V4(v4) => vxlan.remote(v4),
+                    IPAddress::V6(v6) => vxlan.remote6(v6),
+                };
+                let res = vxlan.port(port).execute().await;
+                match res {
+                    Ok(_) => return Ok(()),
+                    Err(nlError::NetlinkError(nl)) => {
+                        if nl.code == -16 {
+                            task::sleep(Duration::from_millis(backoff)).await;
+                        } else {
+                            return Err(FError::NetworkingError(format!("{}", nl)));
+                        }
+                    }
+                    Err(e) => return Err(FError::NetworkingError(format!("{}", e))),
+                }
+                backoff *= 2;
+                if backoff > 5000 {
+                    return Err(FError::NetworkingError("Timeout".to_string()));
+                }
+            }
         } else {
             Err(FError::NotFound)
         }
@@ -2750,13 +2833,30 @@ impl LinuxNetwork {
             .await
             .map_err(|e| FError::NetworkingError(format!("{}", e)))?
         {
-            state
-                .nl_handler
-                .link()
-                .del(link.header.index)
-                .execute()
-                .await
-                .map_err(|e| FError::NetworkingError(format!("{}", e)))
+            let mut backoff = 100;
+            loop {
+                let res = state
+                    .nl_handler
+                    .link()
+                    .del(link.header.index)
+                    .execute()
+                    .await;
+                match res {
+                    Ok(_) => return Ok(()),
+                    Err(nlError::NetlinkError(nl)) => {
+                        if nl.code == -16 {
+                            task::sleep(Duration::from_millis(backoff)).await;
+                        } else {
+                            return Err(FError::NetworkingError(format!("{}", nl)));
+                        }
+                    }
+                    Err(e) => return Err(FError::NetworkingError(format!("{}", e))),
+                }
+                backoff *= 2;
+                if backoff > 5000 {
+                    return Err(FError::NetworkingError("Timeout".to_string()));
+                }
+            }
         } else {
             Err(FError::NotFound)
         }
@@ -2787,14 +2887,31 @@ impl LinuxNetwork {
                 .await
                 .map_err(|e| FError::NetworkingError(format!("{}", e)))?
             {
-                state
-                    .nl_handler
-                    .link()
-                    .set(link.header.index)
-                    .master(master.header.index)
-                    .execute()
-                    .await
-                    .map_err(|e| FError::NetworkingError(format!("{}", e)))
+                let mut backoff = 100;
+                loop {
+                    let res = state
+                        .nl_handler
+                        .link()
+                        .set(link.header.index)
+                        .master(master.header.index)
+                        .execute()
+                        .await;
+                    match res {
+                        Ok(_) => return Ok(()),
+                        Err(nlError::NetlinkError(nl)) => {
+                            if nl.code == -16 {
+                                task::sleep(Duration::from_millis(backoff)).await;
+                            } else {
+                                return Err(FError::NetworkingError(format!("{}", nl)));
+                            }
+                        }
+                        Err(e) => return Err(FError::NetworkingError(format!("{}", e))),
+                    }
+                    backoff *= 2;
+                    if backoff > 5000 {
+                        return Err(FError::NetworkingError("Timeout".to_string()));
+                    }
+                }
             } else {
                 log::error!("set_iface_master master not found");
                 Err(FError::NotFound)
@@ -2819,14 +2936,31 @@ impl LinuxNetwork {
             .await
             .map_err(|e| FError::NetworkingError(format!("{}", e)))?
         {
-            state
-                .nl_handler
-                .link()
-                .set(link.header.index)
-                .nomaster()
-                .execute()
-                .await
-                .map_err(|e| FError::NetworkingError(format!("{}", e)))
+            let mut backoff = 100;
+            loop {
+                let res = state
+                    .nl_handler
+                    .link()
+                    .set(link.header.index)
+                    .nomaster()
+                    .execute()
+                    .await;
+                match res {
+                    Ok(_) => return Ok(()),
+                    Err(nlError::NetlinkError(nl)) => {
+                        if nl.code == -16 {
+                            task::sleep(Duration::from_millis(backoff)).await;
+                        } else {
+                            return Err(FError::NetworkingError(format!("{}", nl)));
+                        }
+                    }
+                    Err(e) => return Err(FError::NetworkingError(format!("{}", e))),
+                }
+                backoff *= 2;
+                if backoff > 5000 {
+                    return Err(FError::NetworkingError("Timeout".to_string()));
+                }
+            }
         } else {
             log::error!("del_iface_master iface not found");
             Err(FError::NotFound)
@@ -2847,13 +2981,30 @@ impl LinuxNetwork {
             .await
             .map_err(|e| FError::NetworkingError(format!("{}", e)))?
         {
-            state
-                .nl_handler
-                .address()
-                .add(link.header.index, addr, prefix)
-                .execute()
-                .await
-                .map_err(|e| FError::NetworkingError(format!("{}", e)))
+            let mut backoff = 100;
+            loop {
+                let res = state
+                    .nl_handler
+                    .address()
+                    .add(link.header.index, addr, prefix)
+                    .execute()
+                    .await;
+                match res {
+                    Ok(_) => return Ok(()),
+                    Err(nlError::NetlinkError(nl)) => {
+                        if nl.code == -16 {
+                            task::sleep(Duration::from_millis(backoff)).await;
+                        } else {
+                            return Err(FError::NetworkingError(format!("{}", nl)));
+                        }
+                    }
+                    Err(e) => return Err(FError::NetworkingError(format!("{}", e))),
+                }
+                backoff *= 2;
+                if backoff > 5000 {
+                    return Err(FError::NetworkingError("Timeout".to_string()));
+                }
+            }
         } else {
             Err(FError::NotFound)
         }
@@ -2906,14 +3057,25 @@ impl LinuxNetwork {
                         header: hdr,
                         nlas: vec![Nla::Address(addr)],
                     };
-                    state
-                        .nl_handler
-                        .address()
-                        .del(msg)
-                        .execute()
-                        .await
-                        .map_err(|e| FError::NetworkingError(format!("{}", e)))?;
-                    Ok(())
+                    let mut backoff = 100;
+                    loop {
+                        let res = state.nl_handler.address().del(msg.clone()).execute().await;
+                        match res {
+                            Ok(_) => return Ok(()),
+                            Err(nlError::NetlinkError(nl)) => {
+                                if nl.code == -16 {
+                                    task::sleep(Duration::from_millis(backoff)).await;
+                                } else {
+                                    return Err(FError::NetworkingError(format!("{}", nl)));
+                                }
+                            }
+                            Err(e) => return Err(FError::NetworkingError(format!("{}", e))),
+                        }
+                        backoff *= 2;
+                        if backoff > 5000 {
+                            return Err(FError::NetworkingError("Timeout".to_string()));
+                        }
+                    }
                 }
                 None => Err(FError::NotFound),
             }
@@ -2993,14 +3155,31 @@ impl LinuxNetwork {
             .await
             .map_err(|e| FError::NetworkingError(format!("{}", e)))?
         {
-            state
-                .nl_handler
-                .link()
-                .set(link.header.index)
-                .name(new_name)
-                .execute()
-                .await
-                .map_err(|e| FError::NetworkingError(format!("{}", e)))
+            let mut backoff = 100;
+            loop {
+                let res = state
+                    .nl_handler
+                    .link()
+                    .set(link.header.index)
+                    .name(new_name.clone())
+                    .execute()
+                    .await;
+                match res {
+                    Ok(_) => return Ok(()),
+                    Err(nlError::NetlinkError(nl)) => {
+                        if nl.code == -16 {
+                            task::sleep(Duration::from_millis(backoff)).await;
+                        } else {
+                            return Err(FError::NetworkingError(format!("{}", nl)));
+                        }
+                    }
+                    Err(e) => return Err(FError::NetworkingError(format!("{}", e))),
+                }
+                backoff *= 2;
+                if backoff > 5000 {
+                    return Err(FError::NetworkingError("Timeout".to_string()));
+                }
+            }
         } else {
             Err(FError::NotFound)
         }
@@ -3020,14 +3199,31 @@ impl LinuxNetwork {
             .await
             .map_err(|e| FError::NetworkingError(format!("{}", e)))?
         {
-            state
-                .nl_handler
-                .link()
-                .set(link.header.index)
-                .address(address)
-                .execute()
-                .await
-                .map_err(|e| FError::NetworkingError(format!("{}", e)))
+            let mut backoff = 100;
+            loop {
+                let res = state
+                    .nl_handler
+                    .link()
+                    .set(link.header.index)
+                    .address(address.clone())
+                    .execute()
+                    .await;
+                match res {
+                    Ok(_) => return Ok(()),
+                    Err(nlError::NetlinkError(nl)) => {
+                        if nl.code == -16 {
+                            task::sleep(Duration::from_millis(backoff)).await;
+                        } else {
+                            return Err(FError::NetworkingError(format!("{}", nl)));
+                        }
+                    }
+                    Err(e) => return Err(FError::NetworkingError(format!("{}", e))),
+                }
+                backoff *= 2;
+                if backoff > 5000 {
+                    return Err(FError::NetworkingError("Timeout".to_string()));
+                }
+            }
         } else {
             Err(FError::NotFound)
         }
@@ -3039,6 +3235,7 @@ impl LinuxNetwork {
         let netns = format!("{}{}", NETNS_PATH, netns);
         let mut state = self.state.write().await;
         let nsfile = std::fs::File::open(netns)?;
+        let raw_fd = nsfile.into_raw_fd();
         let mut links = state
             .nl_handler
             .link()
@@ -3050,14 +3247,31 @@ impl LinuxNetwork {
             .await
             .map_err(|e| FError::NetworkingError(format!("{}", e)))?
         {
-            state
-                .nl_handler
-                .link()
-                .set(link.header.index)
-                .setns_by_fd(nsfile.into_raw_fd())
-                .execute()
-                .await
-                .map_err(|e| FError::NetworkingError(format!("{}", e)))
+            let mut backoff = 100;
+            loop {
+                let res = state
+                    .nl_handler
+                    .link()
+                    .set(link.header.index)
+                    .setns_by_fd(raw_fd)
+                    .execute()
+                    .await;
+                match res {
+                    Ok(_) => return Ok(()),
+                    Err(nlError::NetlinkError(nl)) => {
+                        if nl.code == -16 {
+                            task::sleep(Duration::from_millis(backoff)).await;
+                        } else {
+                            return Err(FError::NetworkingError(format!("{}", nl)));
+                        }
+                    }
+                    Err(e) => return Err(FError::NetworkingError(format!("{}", e))),
+                }
+                backoff *= 2;
+                if backoff > 5000 {
+                    return Err(FError::NetworkingError("Timeout".to_string()));
+                }
+            }
         } else {
             Err(FError::NotFound)
         }
@@ -3077,14 +3291,31 @@ impl LinuxNetwork {
             .await
             .map_err(|e| FError::NetworkingError(format!("{}", e)))?
         {
-            state
-                .nl_handler
-                .link()
-                .set(link.header.index)
-                .setns_by_pid(0)
-                .execute()
-                .await
-                .map_err(|e| FError::NetworkingError(format!("{}", e)))
+            let mut backoff = 100;
+            loop {
+                let res = state
+                    .nl_handler
+                    .link()
+                    .set(link.header.index)
+                    .setns_by_pid(0)
+                    .execute()
+                    .await;
+                match res {
+                    Ok(_) => return Ok(()),
+                    Err(nlError::NetlinkError(nl)) => {
+                        if nl.code == -16 {
+                            task::sleep(Duration::from_millis(backoff)).await;
+                        } else {
+                            return Err(FError::NetworkingError(format!("{}", nl)));
+                        }
+                    }
+                    Err(e) => return Err(FError::NetworkingError(format!("{}", e))),
+                }
+                backoff *= 2;
+                if backoff > 5000 {
+                    return Err(FError::NetworkingError("Timeout".to_string()));
+                }
+            }
         } else {
             Err(FError::NotFound)
         }
@@ -3104,14 +3335,31 @@ impl LinuxNetwork {
             .await
             .map_err(|e| FError::NetworkingError(format!("{}", e)))?
         {
-            state
-                .nl_handler
-                .link()
-                .set(link.header.index)
-                .up()
-                .execute()
-                .await
-                .map_err(|e| FError::NetworkingError(format!("{}", e)))
+            let mut backoff = 100;
+            loop {
+                let res = state
+                    .nl_handler
+                    .link()
+                    .set(link.header.index)
+                    .up()
+                    .execute()
+                    .await;
+                match res {
+                    Ok(_) => return Ok(()),
+                    Err(nlError::NetlinkError(nl)) => {
+                        if nl.code == -16 {
+                            task::sleep(Duration::from_millis(backoff)).await;
+                        } else {
+                            return Err(FError::NetworkingError(format!("{}", nl)));
+                        }
+                    }
+                    Err(e) => return Err(FError::NetworkingError(format!("{}", e))),
+                }
+                backoff *= 2;
+                if backoff > 5000 {
+                    return Err(FError::NetworkingError("Timeout".to_string()));
+                }
+            }
         } else {
             Err(FError::NotFound)
         }
@@ -3131,14 +3379,31 @@ impl LinuxNetwork {
             .await
             .map_err(|e| FError::NetworkingError(format!("{}", e)))?
         {
-            state
-                .nl_handler
-                .link()
-                .set(link.header.index)
-                .down()
-                .execute()
-                .await
-                .map_err(|e| FError::NetworkingError(format!("{}", e)))
+            let mut backoff = 100;
+            loop {
+                let res = state
+                    .nl_handler
+                    .link()
+                    .set(link.header.index)
+                    .down()
+                    .execute()
+                    .await;
+                match res {
+                    Ok(_) => return Ok(()),
+                    Err(nlError::NetlinkError(nl)) => {
+                        if nl.code == -16 {
+                            task::sleep(Duration::from_millis(backoff)).await;
+                        } else {
+                            return Err(FError::NetworkingError(format!("{}", nl)));
+                        }
+                    }
+                    Err(e) => return Err(FError::NetworkingError(format!("{}", e))),
+                }
+                backoff *= 2;
+                if backoff > 5000 {
+                    return Err(FError::NetworkingError("Timeout".to_string()));
+                }
+            }
         } else {
             Err(FError::NotFound)
         }
