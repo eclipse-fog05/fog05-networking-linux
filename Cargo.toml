@@ -14,7 +14,6 @@ description = "Eclipse fog05 Linux Networking Plugin"
 [dependencies]
 async-std = { version = "=1.9.0", features = ["attributes"] }
 zenoh = { git = "https://github.com/eclipse-zenoh/zenoh.git", branch = "master" }
-zenoh-protocol = { git = "https://github.com/eclipse-zenoh/zenoh.git", branch = "master" }
 zrpc = { git = "https://github.com/eclipse-fog05/fog05.git", branch = "master" }
 znrpc-macros = { git = "https://github.com/eclipse-fog05/fog05.git", branch = "master" }
 fog05-sdk = { git = "https://github.com/eclipse-fog05/fog05.git", branch = "master" }
