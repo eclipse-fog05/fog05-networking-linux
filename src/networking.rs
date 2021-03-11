@@ -943,7 +943,9 @@ impl NetworkingPlugin for LinuxNetwork {
         self.spawn_ns_manager(ns_name.clone(), netns.uuid).await?;
         let ns_manager = self.get_ns_manager(&netns.uuid).await?;
 
-        while !ns_manager.verify_server().await? {}
+        while !ns_manager.verify_server().await? {
+            task::sleep(Duration::from_micros((100))).await;
+        }
 
         ns_manager
             .set_virtual_interface_up("lo".to_string())
