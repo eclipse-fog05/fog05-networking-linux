@@ -35,7 +35,7 @@ base64 = "0.13.0"
 url = "2.1.1"
 mac_address = {version =  "1.1.1", features = ["serde"]}
 async-ctrlc ={version = "1.2.0", features = ["stream"]}
-reqwest = { version = "0.11.0", features = ["blocking", "json"] }
+reqwest = { version = "0.11.0", default-features = false, features = ["json", "rustls-tls"] }
 rand = "0.8.3"
 nix = "0.19.0"
 clap = "2.33"
