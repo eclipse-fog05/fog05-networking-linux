@@ -1832,12 +1832,6 @@ impl LinuxNetwork {
         guard.uuid = Some(hv_server.instance_uuid());
         drop(guard);
 
-        self.agent
-            .clone()
-            .unwrap()
-            .register_plugin(hv_server.instance_uuid(), PluginKind::NETWORKING)
-            .await??;
-
         hv_server.register().await?;
 
         let (shv, _hhv) = hv_server.start().await?;
@@ -1848,6 +1842,12 @@ impl LinuxNetwork {
                 task::sleep(Duration::from_secs(60)).await;
             }
         };
+
+        self.agent
+            .clone()
+            .unwrap()
+            .register_plugin(hv_server.instance_uuid(), PluginKind::NETWORKING)
+            .await??;
 
         match monitoring.race(stop.recv()).await {
             Ok(_) => trace!("Monitoring ending correct"),
