@@ -18,15 +18,13 @@ extern crate serde_json;
 
 use serde::{Deserialize, Serialize};
 
-use async_std::prelude::FutureExt;
 use async_std::sync::{Arc, RwLock};
 
 use futures::prelude::*;
 use std::collections::HashMap;
-use std::convert::TryFrom;
 use std::str;
 
-use fog05_sdk::agent::{AgentPluginInterfaceClient, OSClient};
+use fog05_sdk::agent::{plugin::AgentPluginInterfaceClient, os::OSClient};
 use fog05_sdk::fresult::{FError, FResult};
 use fog05_sdk::types::IPAddress;
 
