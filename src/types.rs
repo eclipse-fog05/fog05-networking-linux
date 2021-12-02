@@ -24,7 +24,7 @@ use futures::prelude::*;
 use std::collections::HashMap;
 use std::str;
 
-use fog05_sdk::agent::{plugin::AgentPluginInterfaceClient, os::OSClient};
+use fog05_sdk::agent::{os::OSClient, plugin::AgentPluginInterfaceClient};
 use fog05_sdk::fresult::{FError, FResult};
 use fog05_sdk::types::IPAddress;
 
